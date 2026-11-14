@@ -1,0 +1,10 @@
+{
+  "name": "TRICITY RUN",
+  "description": "Smart mobile-first running companion for Chandigarh Tricity — pedestrian route planning, live GPS tracking, Run Art, and city trail discovery.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

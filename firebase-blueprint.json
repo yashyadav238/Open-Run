@@ -1,0 +1,152 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Runner profile and aggregated running stats",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 512 },
+        "preferredUnit": { "type": "string", "enum": ["km", "mi"] },
+        "preferredTerrain": { "type": "string", "maxLength": 40 },
+        "city": { "type": "string", "maxLength": 40 },
+        "totalDistanceKm": { "type": "number" },
+        "totalRuns": { "type": "number" },
+        "totalDurationSec": { "type": "number" },
+        "longestRunKm": { "type": "number" },
+        "bestPaceSecPerKm": { "type": "number" },
+        "currentStreakDays": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "preferredUnit", "createdAt", "updatedAt"]
+    },
+    "UserPrivateSafety": {
+      "title": "UserPrivateSafety",
+      "description": "Private emergency and safety contact settings",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "emergencyContactName": { "type": "string", "maxLength": 80 },
+        "emergencyContactPhone": { "type": "string", "maxLength": 30 },
+        "trustedShareEnabled": { "type": "boolean" },
+        "checkInIntervalMin": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "trustedShareEnabled", "updatedAt"]
+    },
+    "SavedRoute": {
+      "title": "SavedRoute",
+      "description": "User-saved pedestrian running route",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "city": { "type": "string", "maxLength": 50 },
+        "routeType": { "type": "string", "enum": ["circular", "out_and_back", "point_to_point", "run_art"] },
+        "distanceMeters": { "type": "number" },
+        "durationSec": { "type": "number" },
+        "elevationGainMeters": { "type": "number" },
+        "startLat": { "type": "number" },
+        "startLng": { "type": "number" },
+        "startName": { "type": "string", "maxLength": 140 },
+        "endLat": { "type": "number" },
+        "endLng": { "type": "number" },
+        "endName": { "type": "string", "maxLength": 140 },
+        "encodedPolyline": { "type": "string", "maxLength": 20000 },
+        "isPublic": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "routeType", "distanceMeters", "startLat", "startLng", "endLat", "endLng", "encodedPolyline", "isPublic", "createdAt", "updatedAt"]
+    },
+    "RunActivity": {
+      "title": "RunActivity",
+      "description": "Completed GPS-tracked run activity",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "routeId": { "type": "string", "maxLength": 128 },
+        "routeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "routeType": { "type": "string", "enum": ["circular", "out_and_back", "point_to_point", "run_art", "free_run"] },
+        "distanceMeters": { "type": "number" },
+        "durationSec": { "type": "number" },
+        "avgPaceSecPerKm": { "type": "number" },
+        "bestPaceSecPerKm": { "type": "number" },
+        "avgSpeedKmh": { "type": "number" },
+        "elevationGainMeters": { "type": "number" },
+        "encodedPolyline": { "type": "string", "maxLength": 25000 },
+        "startName": { "type": "string", "maxLength": 140 },
+        "sampleCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed"] },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "routeName", "routeType", "distanceMeters", "durationSec", "status", "createdAt"]
+    },
+    "RunArtDesign": {
+      "title": "RunArtDesign",
+      "description": "GPS Run Art design snapped to pedestrian paths",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "shapeType": { "type": "string", "enum": ["heart", "circle", "star", "smiley", "diamond", "infinity", "lightning", "hexagon", "alphabet", "custom"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "city": { "type": "string", "maxLength": 50 },
+        "startLat": { "type": "number" },
+        "startLng": { "type": "number" },
+        "targetDistanceKm": { "type": "number" },
+        "actualDistanceKm": { "type": "number" },
+        "encodedPolyline": { "type": "string", "maxLength": 25000 },
+        "matchScore": { "type": "number" },
+        "status": { "type": "string", "enum": ["planned", "completed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "shapeType", "title", "startLat", "startLng", "actualDistanceKm", "encodedPolyline", "matchScore", "status", "createdAt"]
+    },
+    "ChallengeProgress": {
+      "title": "ChallengeProgress",
+      "description": "User personal running challenge state",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "challengeKey": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "currentValue": { "type": "number" },
+        "targetValue": { "type": "number" },
+        "completed": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "challengeKey", "currentValue", "targetValue", "completed", "updatedAt"]
+    },
+    "PathReport": {
+      "title": "PathReport",
+      "description": "Community trail or blocked path report",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "reporterName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "city": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "areaName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "issueType": { "type": "string", "enum": ["blocked", "construction", "lighting", "surface"] },
+        "description": { "type": "string", "minLength": 3, "maxLength": 300 },
+        "status": { "type": "string", "enum": ["active", "resolved"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "reporterName", "city", "areaName", "issueType", "description", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": "UserProfile", "description": "Runner profile" },
+    "/users/{userId}/private/{docId}": { "schema": "UserPrivateSafety", "description": "Private safety preferences" },
+    "/saved_routes/{routeId}": { "schema": "SavedRoute", "description": "Saved pedestrian routes" },
+    "/runs/{runId}": { "schema": "RunActivity", "description": "Completed runs" },
+    "/run_art_designs/{designId}": { "schema": "RunArtDesign", "description": "GPS Run Art designs" },
+    "/challenges/{challengeId}": { "schema": "ChallengeProgress", "description": "User challenge progress" },
+    "/path_reports/{reportId}": { "schema": "PathReport", "description": "Community path reports" }
+  }
+}

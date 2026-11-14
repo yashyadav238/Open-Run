@@ -1,0 +1,249 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'preferredUnit', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'photoURL', 'preferredUnit', 'preferredTerrain',
+          'city', 'totalDistanceKm', 'totalRuns', 'totalDurationSec',
+          'longestRunKm', 'bestPaceSecPerKm', 'currentStreakDays',
+          'createdAt', 'updatedAt'
+        ])
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80
+        && data.preferredUnit in ['km', 'mi']
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 512))
+        && (!('preferredTerrain' in data) || (data.preferredTerrain is string && data.preferredTerrain.size() <= 40))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 40))
+        && (!('totalDistanceKm' in data) || (data.totalDistanceKm is number && data.totalDistanceKm >= 0))
+        && (!('totalRuns' in data) || (data.totalRuns is number && data.totalRuns >= 0))
+        && (!('totalDurationSec' in data) || (data.totalDurationSec is number && data.totalDurationSec >= 0))
+        && (!('longestRunKm' in data) || (data.longestRunKm is number && data.longestRunKm >= 0))
+        && (!('bestPaceSecPerKm' in data) || (data.bestPaceSecPerKm is number && data.bestPaceSecPerKm >= 0))
+        && (!('currentStreakDays' in data) || (data.currentStreakDays is number && data.currentStreakDays >= 0));
+    }
+
+    function isValidSafetyDoc(data) {
+      return data.keys().hasAll(['userId', 'trustedShareEnabled', 'updatedAt'])
+        && data.keys().hasOnly([
+          'userId', 'emergencyContactName', 'emergencyContactPhone',
+          'trustedShareEnabled', 'checkInIntervalMin', 'updatedAt'
+        ])
+        && data.userId == request.auth.uid
+        && data.trustedShareEnabled is bool
+        && (!('emergencyContactName' in data) || (data.emergencyContactName is string && data.emergencyContactName.size() <= 80))
+        && (!('emergencyContactPhone' in data) || (data.emergencyContactPhone is string && data.emergencyContactPhone.size() <= 30))
+        && (!('checkInIntervalMin' in data) || (data.checkInIntervalMin is number && data.checkInIntervalMin >= 5 && data.checkInIntervalMin <= 240));
+    }
+
+    function isValidSavedRoute(data) {
+      return data.keys().hasAll([
+          'userId', 'name', 'routeType', 'distanceMeters',
+          'startLat', 'startLng', 'endLat', 'endLng',
+          'encodedPolyline', 'isPublic', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'name', 'notes', 'city', 'routeType', 'distanceMeters',
+          'durationSec', 'elevationGainMeters', 'startLat', 'startLng',
+          'startName', 'endLat', 'endLng', 'endName', 'encodedPolyline',
+          'preferences', 'isPublic', 'createdAt', 'updatedAt'
+        ])
+        && data.userId == request.auth.uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.routeType in ['circular', 'out_and_back', 'point_to_point', 'run_art']
+        && data.distanceMeters is number && data.distanceMeters > 0 && data.distanceMeters <= 100000
+        && data.startLat is number && data.startLng is number
+        && data.endLat is number && data.endLng is number
+        && data.encodedPolyline is string && data.encodedPolyline.size() > 0 && data.encodedPolyline.size() <= 20000
+        && data.isPublic is bool
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 50))
+        && (!('startName' in data) || (data.startName is string && data.startName.size() <= 140))
+        && (!('endName' in data) || (data.endName is string && data.endName.size() <= 140))
+        && (!('durationSec' in data) || (data.durationSec is number && data.durationSec >= 0))
+        && (!('elevationGainMeters' in data) || (data.elevationGainMeters is number && data.elevationGainMeters >= 0))
+        && (!('preferences' in data) || (data.preferences is list && data.preferences.size() <= 10));
+    }
+
+    function isValidRunActivity(data) {
+      return data.keys().hasAll([
+          'userId', 'routeName', 'routeType', 'distanceMeters',
+          'durationSec', 'status', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'routeId', 'routeName', 'routeType', 'distanceMeters',
+          'durationSec', 'avgPaceSecPerKm', 'bestPaceSecPerKm', 'avgSpeedKmh',
+          'elevationGainMeters', 'splits', 'encodedPolyline', 'startName',
+          'sampleCount', 'status', 'startedAt', 'finishedAt', 'createdAt'
+        ])
+        && data.userId == request.auth.uid
+        && data.routeName is string && data.routeName.size() >= 1 && data.routeName.size() <= 120
+        && data.routeType in ['circular', 'out_and_back', 'point_to_point', 'run_art', 'free_run']
+        && data.distanceMeters is number && data.distanceMeters >= 0 && data.distanceMeters <= 150000
+        && data.durationSec is number && data.durationSec >= 0
+        && data.status == 'completed'
+        && (!('routeId' in data) || (data.routeId is string && data.routeId.size() <= 128))
+        && (!('encodedPolyline' in data) || (data.encodedPolyline is string && data.encodedPolyline.size() <= 25000))
+        && (!('startName' in data) || (data.startName is string && data.startName.size() <= 140))
+        && (!('splits' in data) || (data.splits is list && data.splits.size() <= 100));
+    }
+
+    function isValidRunArtDesign(data) {
+      return data.keys().hasAll([
+          'userId', 'shapeType', 'title', 'startLat', 'startLng',
+          'actualDistanceKm', 'encodedPolyline', 'matchScore', 'status', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'shapeType', 'title', 'city', 'startLat', 'startLng',
+          'targetDistanceKm', 'actualDistanceKm', 'encodedPolyline', 'matchScore',
+          'status', 'createdAt'
+        ])
+        && data.userId == request.auth.uid
+        && data.shapeType in ['heart', 'circle', 'star', 'smiley', 'diamond', 'infinity', 'lightning', 'hexagon', 'alphabet', 'custom']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 100
+        && data.startLat is number && data.startLng is number
+        && data.actualDistanceKm is number && data.actualDistanceKm > 0
+        && data.encodedPolyline is string && data.encodedPolyline.size() > 0 && data.encodedPolyline.size() <= 25000
+        && data.matchScore is number && data.matchScore >= 0 && data.matchScore <= 100
+        && data.status in ['planned', 'completed']
+        && (!('city' in data) || (data.city is string && data.city.size() <= 50))
+        && (!('targetDistanceKm' in data) || (data.targetDistanceKm is number && data.targetDistanceKm > 0));
+    }
+
+    function isValidChallengeProgress(data) {
+      return data.keys().hasAll(['userId', 'challengeKey', 'currentValue', 'targetValue', 'completed', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'challengeKey', 'currentValue', 'targetValue', 'completed', 'completedAt', 'updatedAt'])
+        && data.userId == request.auth.uid
+        && data.challengeKey is string && data.challengeKey.size() >= 1 && data.challengeKey.size() <= 64
+        && data.currentValue is number && data.currentValue >= 0
+        && data.targetValue is number && data.targetValue > 0
+        && data.completed is bool;
+    }
+
+    function isValidPathReport(data) {
+      return data.keys().hasAll(['userId', 'reporterName', 'city', 'areaName', 'issueType', 'description', 'status', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'reporterName', 'city', 'areaName', 'lat', 'lng', 'issueType', 'description', 'status', 'createdAt'])
+        && data.userId == request.auth.uid
+        && data.reporterName is string && data.reporterName.size() >= 1 && data.reporterName.size() <= 80
+        && data.city is string && data.city.size() >= 1 && data.city.size() <= 50
+        && data.areaName is string && data.areaName.size() >= 1 && data.areaName.size() <= 120
+        && data.issueType in ['blocked', 'construction', 'lighting', 'surface']
+        && data.description is string && data.description.size() >= 3 && data.description.size() <= 300
+        && data.status in ['active', 'resolved']
+        && (!('lat' in data) || data.lat is number)
+        && (!('lng' in data) || data.lng is number);
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow create: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming())
+        && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'photoURL', 'preferredUnit', 'preferredTerrain',
+          'city', 'totalDistanceKm', 'totalRuns', 'totalDurationSec',
+          'longestRunKm', 'bestPaceSecPerKm', 'currentStreakDays', 'updatedAt'
+        ]);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+        allow create, update: if isValidId(userId) && isValidId(docId) && isOwner(userId)
+          && isValidSafetyDoc(incoming()) && incoming().updatedAt == request.time;
+        allow delete: if isValidId(userId) && isValidId(docId) && isOwner(userId);
+      }
+    }
+
+    match /saved_routes/{routeId} {
+      allow get: if isValidId(routeId) && (existing().isPublic == true || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isValidId(routeId) && isVerifiedUser() && isValidSavedRoute(incoming())
+        && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(routeId) && isVerifiedUser() && existing().userId == request.auth.uid
+        && isValidSavedRoute(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'notes', 'isPublic', 'updatedAt']);
+      allow delete: if isValidId(routeId) && isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    match /runs/{runId} {
+      allow get: if isValidId(runId) && isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isValidId(runId) && isVerifiedUser() && isValidRunActivity(incoming())
+        && incoming().createdAt == request.time;
+      allow delete: if isValidId(runId) && isSignedIn() && existing().userId == request.auth.uid;
+
+      match /track_batches/{batchId} {
+        allow get: if isValidId(runId) && isValidId(batchId) && isSignedIn()
+          && get(/databases/$(database)/documents/runs/$(runId)).data.userId == request.auth.uid;
+        allow list: if isSignedIn()
+          && get(/databases/$(database)/documents/runs/$(runId)).data.userId == request.auth.uid;
+        allow create: if isValidId(runId) && isValidId(batchId) && isVerifiedUser()
+          && get(/databases/$(database)/documents/runs/$(runId)).data.userId == request.auth.uid
+          && incoming().keys().hasAll(['points', 'batchIndex'])
+          && incoming().keys().hasOnly(['points', 'batchIndex'])
+          && incoming().points is list && incoming().points.size() <= 250
+          && incoming().batchIndex is number;
+      }
+    }
+
+    match /run_art_designs/{designId} {
+      allow get: if isValidId(designId) && isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isValidId(designId) && isVerifiedUser() && isValidRunArtDesign(incoming())
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(designId) && isVerifiedUser() && existing().userId == request.auth.uid
+        && isValidRunArtDesign(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'status']);
+      allow delete: if isValidId(designId) && isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    match /challenges/{challengeId} {
+      allow get: if isValidId(challengeId) && isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create, update: if isValidId(challengeId) && isVerifiedUser()
+        && isValidChallengeProgress(incoming())
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(challengeId) && isSignedIn() && existing().userId == request.auth.uid;
+    }
+
+    match /path_reports/{reportId} {
+      allow get: if isValidId(reportId) && existing().status == 'active';
+      allow list: if existing().status == 'active';
+      allow create: if isValidId(reportId) && isVerifiedUser() && isValidPathReport(incoming())
+        && incoming().createdAt == request.time;
+      allow delete: if isValidId(reportId) && isSignedIn() && existing().userId == request.auth.uid;
+    }
+  }
+}
