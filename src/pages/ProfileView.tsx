@@ -1,19 +1,71 @@
-import React, { useEffect, useState } from 'react';
-import { Award, CheckCircle2, LogOut, Shield, Trophy, User } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  AtSign,
+  Award,
+  Camera,
+  Check,
+  CheckCircle2,
+  Copy,
+  Edit3,
+  FileText,
+  Globe2,
+  Loader2,
+  LogOut,
+  Plus,
+  Shield,
+  Tag,
+  Trash2,
+  Trophy,
+  User,
+  X,
+} from 'lucide-react';
+import { PlaceSearchInput } from '../components/PlaceSearchInput';
+import { WorkoutSelector } from '../components/WorkoutIcon';
+import { WorldCityMapPicker } from '../components/WorldCityMapPicker';
 import { useAuth } from '../context/AuthContext';
+import { processProfilePhotoFile } from '../lib/avatarUpload';
+import {
+  MAX_BIO_LENGTH,
+  MAX_BIO_TAG_LENGTH,
+  MAX_BIO_TAGS,
+  OPTIONAL_BIO_TAGS,
+  sanitizeBioTags,
+} from '../data/bioTags';
+import { getWorkoutMeta, normalizeWorkoutType } from '../data/workouts';
+import {
+  findWorldCityPreset,
+  resolveRunningCity,
+  WORLD_RUNNING_CITIES,
+  type ActiveRunningCity,
+} from '../data/worldCities';
 import { ACHIEVEMENTS, CHALLENGES } from '../services/challengesService';
 import {
+  checkUsernameAvailability,
+  claimUsername,
   getSafetySettings,
+  isValidUsernameFormat,
+  normalizeUsername,
   saveSafetySettings,
   updateUserProfile,
 } from '../services/firestoreService';
-import type { CityName } from '../types/run';
+import type { CityName, WorkoutType } from '../types/run';
 
 interface ProfileViewProps {
+  activeCity: ActiveRunningCity;
+  selectedWorkout?: WorkoutType;
+  onSelectWorkout?: (workout: WorkoutType) => void;
+  onSelectCity: (city: ActiveRunningCity) => void;
   onOpenAuth: () => void;
 }
 
-export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
+export const ProfileView: React.FC<ProfileViewProps> = ({
+  activeCity,
+  selectedWorkout = 'running',
+  onSelectWorkout,
+  onSelectCity,
+  onOpenAuth,
+}) => {
   const {
     user,
     profile,
@@ -26,11 +78,26 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
   } = useAuth();
 
   const [displayName, setDisplayName] = useState(profile?.displayName || '');
+  const [usernameInput, setUsernameInput] = useState(profile?.username || '');
+  const [usernameStatus, setUsernameStatus] = useState<{
+    state: 'idle' | 'checking' | 'available' | 'taken' | 'own' | 'invalid';
+    message?: string;
+  }>({ state: 'idle' });
+  const [copiedUsername, setCopiedUsername] = useState(false);
   const [unit, setUnit] = useState<'km' | 'mi'>(profile?.preferredUnit || 'km');
-  const [city, setCity] = useState<CityName>(profile?.city || 'Chandigarh');
+  const [preferredWorkout, setPreferredWorkout] = useState<WorkoutType>(
+    normalizeWorkoutType(profile?.preferredWorkout ?? selectedWorkout)
+  );
+  const [city, setCity] = useState<CityName>(profile?.city || activeCity.name);
+  const [cityCoords, setCityCoords] = useState<{ lat: number; lng: number }>({
+    lat: profile?.cityLat ?? activeCity.lat,
+    lng: profile?.cityLng ?? activeCity.lng,
+  });
   const [terrain, setTerrain] = useState(profile?.preferredTerrain || 'Parks & Paved Paths');
   const [savingPref, setSavingPref] = useState(false);
   const [prefSavedMsg, setPrefSavedMsg] = useState<string | null>(null);
+  const [prefErrorMsg, setPrefErrorMsg] = useState<string | null>(null);
+  const [guestCityMsg, setGuestCityMsg] = useState<string | null>(null);
 
   const [emergencyName, setEmergencyName] = useState('');
   const [emergencyPhone, setEmergencyPhone] = useState('');
@@ -39,14 +106,95 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
   const [safetyMsg, setSafetyMsg] = useState<string | null>(null);
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
 
+  const [bioInput, setBioInput] = useState(profile?.bio || '');
+  const [bioTags, setBioTags] = useState<string[]>(profile?.bioTags || []);
+  const [customBioTagInput, setCustomBioTagInput] = useState('');
+  const [savingBio, setSavingBio] = useState(false);
+  const [bioSavedMsg, setBioSavedMsg] = useState<string | null>(null);
+  const [bioErrorMsg, setBioErrorMsg] = useState<string | null>(null);
+  const bioSectionRef = useRef<HTMLElement>(null);
+  const bioTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoFeedback, setPhotoFeedback] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
+
+  const effectivePhotoUrl =
+    user && profile && typeof profile.photoURL === 'string'
+      ? profile.photoURL
+      : user?.photoURL || '';
+
+  useEffect(() => {
+    setAvatarLoadError(false);
+  }, [effectivePhotoUrl]);
+
   useEffect(() => {
     if (profile) {
       setDisplayName(profile.displayName);
+      setUsernameInput(profile.username || '');
       setUnit(profile.preferredUnit);
-      setCity(profile.city || 'Chandigarh');
+      setPreferredWorkout(normalizeWorkoutType(profile.preferredWorkout ?? selectedWorkout));
+      const resolved = resolveRunningCity(profile.city, profile.cityLat, profile.cityLng);
+      setCity(resolved.name);
+      setCityCoords({ lat: resolved.lat, lng: resolved.lng });
       setTerrain(profile.preferredTerrain || 'Parks & Paved Paths');
+      setBioInput(profile.bio || '');
+      setBioTags(sanitizeBioTags(profile.bioTags || []));
+    } else {
+      setPreferredWorkout(normalizeWorkoutType(selectedWorkout));
+      setCity(activeCity.name);
+      setCityCoords({ lat: activeCity.lat, lng: activeCity.lng });
+      setBioInput('');
+      setBioTags([]);
     }
-  }, [profile]);
+  }, [profile, activeCity, selectedWorkout]);
+
+  useEffect(() => {
+    if (!user) {
+      setUsernameStatus({ state: 'idle' });
+      return;
+    }
+    const norm = normalizeUsername(usernameInput);
+    if (!norm) {
+      setUsernameStatus({ state: 'idle' });
+      return;
+    }
+    if (norm === (profile?.username || '')) {
+      setUsernameStatus({ state: 'own', message: `@${norm} is your active username.` });
+      return;
+    }
+    if (!isValidUsernameFormat(norm)) {
+      setUsernameStatus({
+        state: 'invalid',
+        message: 'Use 3–24 lowercase letters, numbers, or underscores.',
+      });
+      return;
+    }
+    let cancelled = false;
+    setUsernameStatus({ state: 'checking', message: `Checking @${norm}...` });
+    const timer = window.setTimeout(() => {
+      checkUsernameAvailability(norm, user.uid)
+        .then((res) => {
+          if (cancelled) return;
+          if (res.available) {
+            setUsernameStatus({ state: 'available', message: `@${res.normalized} is available!` });
+          } else {
+            setUsernameStatus({ state: 'taken', message: res.reason || `@${res.normalized} is taken.` });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setUsernameStatus({ state: 'idle' });
+          }
+        });
+    }, 320);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [usernameInput, profile?.username, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -61,20 +209,111 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
       .catch(() => {});
   }, [user]);
 
+  const handleCopyUsername = () => {
+    if (!profile?.username || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(`@${profile.username}`).then(() => {
+      setCopiedUsername(true);
+      window.setTimeout(() => setCopiedUsername(false), 2000);
+    });
+  };
+
+  const applySelectedCity = (name: string, lat: number, lng: number, country?: string) => {
+    const next = resolveRunningCity(name, lat, lng);
+    setCity(next.name);
+    setCityCoords({ lat: next.lat, lng: next.lng });
+    setPrefSavedMsg(null);
+    setPrefErrorMsg(null);
+    if (!user) {
+      onSelectCity({ ...next, country: country || next.country });
+      setGuestCityMsg(`Running City updated to ${next.name}. Maps & planner now stay inside ${next.name}.`);
+      window.setTimeout(() => setGuestCityMsg(null), 4000);
+    }
+  };
+
+  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !user) return;
+    setUploadingPhoto(true);
+    setPhotoFeedback(null);
+    setPhotoError(null);
+    try {
+      const compressedDataUrl = await processProfilePhotoFile(file);
+      await updateUserProfile(user.uid, { photoURL: compressedDataUrl });
+      await refreshProfile();
+      setPhotoFeedback('Profile photo uploaded!');
+      window.setTimeout(() => setPhotoFeedback(null), 3500);
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : 'Could not upload profile photo.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    if (!user) return;
+    setUploadingPhoto(true);
+    setPhotoFeedback(null);
+    setPhotoError(null);
+    try {
+      await updateUserProfile(user.uid, { photoURL: '' });
+      await refreshProfile();
+      setPhotoFeedback('Profile photo removed.');
+      window.setTimeout(() => setPhotoFeedback(null), 3000);
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : 'Could not remove photo.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleUseGooglePhoto = async () => {
+    if (!user || !user.photoURL) return;
+    setUploadingPhoto(true);
+    setPhotoFeedback(null);
+    setPhotoError(null);
+    try {
+      await updateUserProfile(user.uid, { photoURL: user.photoURL });
+      await refreshProfile();
+      setPhotoFeedback('Restored Google profile photo.');
+      window.setTimeout(() => setPhotoFeedback(null), 3000);
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : 'Could not restore photo.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
   const handleSavePreferences = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
     setSavingPref(true);
     setPrefSavedMsg(null);
+    setPrefErrorMsg(null);
     try {
+      const nextName = displayName.trim() || 'Runner';
+      const normHandle = normalizeUsername(usernameInput);
+      if (normHandle && normHandle !== (profile?.username || '')) {
+        await claimUsername(user.uid, normHandle, nextName);
+      }
+      const resolved = resolveRunningCity(city, cityCoords.lat, cityCoords.lng);
       await updateUserProfile(user.uid, {
-        displayName: displayName.trim() || 'Tricity Runner',
+        displayName: nextName,
         preferredUnit: unit,
-        city,
+        preferredWorkout,
+        city: resolved.name,
+        cityLat: resolved.lat,
+        cityLng: resolved.lng,
         preferredTerrain: terrain,
       });
+      onSelectWorkout?.(preferredWorkout);
+      onSelectCity(resolved);
       await refreshProfile();
-      setPrefSavedMsg('Preferences updated.');
+      setPrefSavedMsg(
+        `Preferences saved. Default sport: ${getWorkoutMeta(preferredWorkout).fullLabel} · City: ${resolved.name}.`
+      );
+    } catch (err) {
+      setPrefErrorMsg(err instanceof Error ? err.message : 'Could not save preferences.');
     } finally {
       setSavingPref(false);
     }
@@ -98,6 +337,72 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
     }
   };
 
+  const toggleBioTag = (tag: string) => {
+    setBioSavedMsg(null);
+    setBioErrorMsg(null);
+    setBioTags((prev) => {
+      const exists = prev.some((t) => t.toLowerCase() === tag.toLowerCase());
+      if (exists) {
+        return prev.filter((t) => t.toLowerCase() !== tag.toLowerCase());
+      }
+      if (prev.length >= MAX_BIO_TAGS) {
+        setBioErrorMsg(`You can select up to ${MAX_BIO_TAGS} optional tags.`);
+        return prev;
+      }
+      return sanitizeBioTags([...prev, tag]);
+    });
+  };
+
+  const handleAddCustomBioTag = () => {
+    const trimmed = customBioTagInput.trim().slice(0, MAX_BIO_TAG_LENGTH);
+    if (!trimmed) return;
+    setBioSavedMsg(null);
+    setBioErrorMsg(null);
+    if (bioTags.some((t) => t.toLowerCase() === trimmed.toLowerCase())) {
+      setCustomBioTagInput('');
+      return;
+    }
+    if (bioTags.length >= MAX_BIO_TAGS) {
+      setBioErrorMsg(`You can add up to ${MAX_BIO_TAGS} optional tags.`);
+      return;
+    }
+    setBioTags((prev) => sanitizeBioTags([...prev, trimmed]));
+    setCustomBioTagInput('');
+  };
+
+  const handleSaveBio = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setSavingBio(true);
+    setBioSavedMsg(null);
+    setBioErrorMsg(null);
+    try {
+      const cleanBio = bioInput.trim().slice(0, MAX_BIO_LENGTH);
+      const cleanTags = sanitizeBioTags(bioTags);
+      await updateUserProfile(user.uid, {
+        bio: cleanBio,
+        bioTags: cleanTags,
+      });
+      await refreshProfile();
+      setBioInput(cleanBio);
+      setBioTags(cleanTags);
+      setBioSavedMsg('Bio and optional tags saved.');
+    } catch (err) {
+      setBioErrorMsg(err instanceof Error ? err.message : 'Could not save bio.');
+    } finally {
+      setSavingBio(false);
+    }
+  };
+
+  const scrollToBioEditor = () => {
+    bioSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    window.setTimeout(() => bioTextareaRef.current?.focus(), 250);
+  };
+
+  const customSelectedTags = bioTags.filter(
+    (tag) => !OPTIONAL_BIO_TAGS.some((preset) => preset.toLowerCase() === tag.toLowerCase())
+  );
+
   return (
     <div className="space-y-6">
       {/* Identity Header */}
@@ -119,38 +424,169 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
             </button>
           </div>
         ) : (
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-4">
-              {user.photoURL ? (
-                <img
-                  src={user.photoURL}
-                  alt={profile?.displayName || 'Runner avatar'}
-                  referrerPolicy="no-referrer"
-                  className="h-14 w-14 rounded-full object-cover border border-[#E5E3DC]"
-                />
-              ) : (
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[#172D27] text-[#9AE62E]">
-                  <User className="h-6 w-6" />
+          <div className="space-y-3">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-4">
+                <div className="relative shrink-0">
+                  {effectivePhotoUrl && !avatarLoadError ? (
+                    <img
+                      src={effectivePhotoUrl}
+                      alt={profile?.displayName || 'Runner avatar'}
+                      referrerPolicy="no-referrer"
+                      onError={() => setAvatarLoadError(true)}
+                      className="h-16 w-16 rounded-full object-cover border-2 border-[#172D27]"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#172D27] text-[#9AE62E]">
+                      <User className="h-7 w-7" />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={uploadingPhoto}
+                    onClick={() => photoInputRef.current?.click()}
+                    aria-label="Upload profile photo"
+                    title="Upload profile photo"
+                    className="absolute -right-1 -bottom-1 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#172D27] text-[#9AE62E] shadow hover:bg-[#30483E] disabled:opacity-60"
+                  >
+                    {uploadingPhoto ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Camera className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/*"
+                    onChange={handlePhotoFileChange}
+                    className="hidden"
+                  />
                 </div>
-              )}
-              <div>
-                <h1 className="font-display text-xl font-bold text-[#141F1B]">
-                  {profile?.displayName || user.displayName || 'Tricity Runner'}
-                </h1>
-                <p className="text-xs text-[#5B6B64]">
-                  {user.email} · {city} · {runs.length} runs logged
-                </p>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="font-display text-xl font-bold text-[#141F1B]">
+                      {profile?.displayName || user.displayName || 'Runner'}
+                    </h1>
+                    {profile?.username && (
+                      <button
+                        type="button"
+                        onClick={handleCopyUsername}
+                        title="Copy @username"
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#EBF5EE] px-2 py-0.5 font-mono text-xs font-bold text-[#172D27] hover:bg-[#DCEFE2]"
+                      >
+                        <span>@{profile.username}</span>
+                        {copiedUsername ? (
+                          <Check className="h-3 w-3 text-[#30483E]" />
+                        ) : (
+                          <Copy className="h-3 w-3 text-[#5B6B64]" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-[#5B6B64]">
+                    {user.email} · {city} · {runs.length} activities · {getWorkoutMeta(preferredWorkout).fullLabel}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={uploadingPhoto}
+                      onClick={() => photoInputRef.current?.click()}
+                      className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-[#D9D7CE] bg-[#F6F5F0] px-2.5 text-[11px] font-semibold text-[#172D27] hover:bg-[#EBF5EE] disabled:opacity-50"
+                    >
+                      <Camera className="h-3 w-3" />
+                      {uploadingPhoto
+                        ? 'Saving photo...'
+                        : effectivePhotoUrl
+                        ? 'Change Photo'
+                        : 'Upload Photo'}
+                    </button>
+                    {user.photoURL && effectivePhotoUrl !== user.photoURL && (
+                      <button
+                        type="button"
+                        disabled={uploadingPhoto}
+                        onClick={() => void handleUseGooglePhoto()}
+                        className="inline-flex min-h-[32px] items-center rounded-lg border border-[#D9D7CE] bg-white px-2.5 text-[11px] font-semibold text-[#30483E] hover:bg-[#F6F5F0] disabled:opacity-50"
+                      >
+                        Use Google Photo
+                      </button>
+                    )}
+                    {effectivePhotoUrl && (
+                      <button
+                        type="button"
+                        disabled={uploadingPhoto}
+                        onClick={() => void handleRemovePhoto()}
+                        className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[#D9D7CE] bg-white px-2.5 text-[11px] font-semibold text-[#5B6B64] hover:text-red-700 disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={scrollToBioEditor}
+                  className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-4 text-xs font-semibold text-[#172D27] hover:bg-[#EBF5EE]"
+                >
+                  <Edit3 className="h-3.5 w-3.5" />
+                  Edit Bio
+                </button>
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-[#D9D7CE] px-4 text-xs font-semibold text-[#141F1B] hover:bg-[#F6F5F0]"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Sign Out
+                </button>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={logout}
-              className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-[#D9D7CE] px-4 text-xs font-semibold text-[#141F1B] hover:bg-[#F6F5F0]"
-            >
-              <LogOut className="h-4 w-4" />
-              Sign Out
-            </button>
+            {photoError && <p className="text-xs font-semibold text-red-700">{photoError}</p>}
+            {photoFeedback && <p className="text-xs font-semibold text-[#30483E]">{photoFeedback}</p>}
+          </div>
+        )}
+
+        {/* Saved Bio & Optional Tags Summary directly under individual profile */}
+        {user && (
+          <div className="mt-4 border-t border-[#ECEAE2] pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#5B6B64]">
+                <FileText className="h-3.5 w-3.5 text-[#172D27]" />
+                Bio
+              </span>
+              {profile?.bioTags && profile.bioTags.length > 0 && (
+                <span className="text-[11px] font-medium text-[#5B6B64]">
+                  {profile.bioTags.length} {profile.bioTags.length === 1 ? 'tag' : 'tags'}
+                </span>
+              )}
+            </div>
+
+            {profile?.bio && profile.bio.trim() ? (
+              <p className="mt-1.5 text-sm leading-relaxed text-[#141F1B]">{profile.bio}</p>
+            ) : (
+              <p className="mt-1.5 text-xs italic text-[#5B6B64]">
+                No bio added yet. Add a short description and optional tags below so other runners know your pace and style.
+              </p>
+            )}
+
+            {profile?.bioTags && profile.bioTags.length > 0 && (
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
+                {profile.bioTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center gap-1 rounded-md bg-[#EBF5EE] px-2.5 py-1 text-[11px] font-semibold text-[#172D27]"
+                  >
+                    <Tag className="h-3 w-3 text-[#30483E]" />
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -169,6 +605,177 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
           </div>
         )}
       </div>
+
+      {/* Bio Description & Optional Tags Editor */}
+      <section
+        ref={bioSectionRef}
+        className="rounded-2xl border border-[#E5E3DC] bg-white p-5 sm:p-6"
+      >
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="h-5 w-5 text-[#172D27]" />
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#141F1B]">Bio</h2>
+              <p className="text-xs text-[#5B6B64]">
+                Add a description under your profile and pick optional tags for your running style.
+              </p>
+            </div>
+          </div>
+          {user && (
+            <span className="font-mono text-[11px] font-semibold text-[#5B6B64] tabular-nums">
+              {bioTags.length}/{MAX_BIO_TAGS} optional tags
+            </span>
+          )}
+        </div>
+
+        {!user ? (
+          <div className="mt-4 flex flex-col gap-3 rounded-xl bg-[#F6F5F0] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-[#5B6B64]">
+              Sign in to write your runner bio and choose optional tags such as Morning Runner, Trail &amp; Parks, or Pace Buddy Wanted.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenAuth}
+              className="min-h-[40px] shrink-0 rounded-xl bg-[#172D27] px-4 text-xs font-semibold text-[#9AE62E]"
+            >
+              Sign In
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleSaveBio} className="mt-4 space-y-4">
+            <div>
+              <div className="flex items-center justify-between">
+                <label htmlFor="runner-bio-textarea" className="text-xs font-semibold text-[#5B6B64]">
+                  Description
+                </label>
+                <span className="font-mono text-[11px] text-[#5B6B64] tabular-nums">
+                  {bioInput.length} / {MAX_BIO_LENGTH}
+                </span>
+              </div>
+              <textarea
+                id="runner-bio-textarea"
+                ref={bioTextareaRef}
+                rows={3}
+                maxLength={MAX_BIO_LENGTH}
+                value={bioInput}
+                onChange={(e) => {
+                  setBioInput(e.target.value);
+                  setBioSavedMsg(null);
+                  setBioErrorMsg(null);
+                }}
+                placeholder="e.g. Morning 5K–10K runner looking for easy conversational pace partners, weekend long runs, and new city loops."
+                className="mt-1.5 w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0]/50 px-3.5 py-2.5 text-sm text-[#141F1B] placeholder:text-[#8A9690] focus:border-[#172D27] focus:bg-white focus:outline-none"
+              />
+            </div>
+
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-[#5B6B64]">
+                  Optional Tags <span className="font-normal">(tap to toggle up to {MAX_BIO_TAGS})</span>
+                </span>
+                {bioTags.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBioTags([]);
+                      setBioSavedMsg(null);
+                      setBioErrorMsg(null);
+                    }}
+                    className="text-[11px] font-semibold text-[#5B6B64] hover:text-[#141F1B] hover:underline"
+                  >
+                    Clear selected
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {OPTIONAL_BIO_TAGS.map((tag) => {
+                  const selected = bioTags.some((t) => t.toLowerCase() === tag.toLowerCase());
+                  const atLimit = !selected && bioTags.length >= MAX_BIO_TAGS;
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => toggleBioTag(tag)}
+                      disabled={atLimit}
+                      aria-pressed={selected}
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                        selected
+                          ? 'border-[#172D27] bg-[#172D27] text-[#9AE62E]'
+                          : 'border-[#D9D7CE] bg-[#F6F5F0] text-[#141F1B] hover:border-[#30483E] disabled:cursor-not-allowed disabled:opacity-45'
+                      }`}
+                    >
+                      {selected ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3 text-[#5B6B64]" />}
+                      <span>{tag}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {customSelectedTags.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[11px] font-semibold text-[#5B6B64]">Custom:</span>
+                  {customSelectedTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[#172D27] bg-[#172D27] px-2.5 py-1 text-xs font-semibold text-[#9AE62E]"
+                    >
+                      <span>{tag}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleBioTag(tag)}
+                        aria-label={`Remove tag ${tag}`}
+                        className="rounded hover:text-white"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-col gap-2 pt-1 sm:flex-row">
+                <input
+                  type="text"
+                  value={customBioTagInput}
+                  maxLength={MAX_BIO_TAG_LENGTH}
+                  onChange={(e) => setCustomBioTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddCustomBioTag();
+                    }
+                  }}
+                  placeholder="Add a custom optional tag (e.g. Dog Runner, Track Tuesdays)..."
+                  className="min-h-[40px] flex-1 rounded-xl border border-[#D9D7CE] bg-white px-3 text-xs text-[#141F1B] focus:border-[#172D27] focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddCustomBioTag}
+                  disabled={!customBioTagInput.trim() || bioTags.length >= MAX_BIO_TAGS}
+                  className="inline-flex min-h-[40px] shrink-0 items-center justify-center gap-1 rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-4 text-xs font-semibold text-[#141F1B] hover:bg-[#EBF5EE] disabled:opacity-50"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Add Tag
+                </button>
+              </div>
+            </div>
+
+            {bioErrorMsg && <p className="text-xs font-semibold text-red-700">{bioErrorMsg}</p>}
+            {bioSavedMsg && <p className="text-xs font-semibold text-[#30483E]">{bioSavedMsg}</p>}
+
+            <div className="flex items-center gap-3">
+              <button
+                type="submit"
+                disabled={savingBio}
+                className="min-h-[44px] rounded-xl bg-[#172D27] px-5 text-xs font-semibold text-[#9AE62E] disabled:opacity-50"
+              >
+                {savingBio ? 'Saving Bio...' : 'Save Bio'}
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
 
       {/* Challenges & Achievements */}
       <div className="grid gap-6 lg:grid-cols-12">
@@ -237,24 +844,156 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
       </div>
 
       {/* Preferences & Privacy / Safety */}
-      {user && (
+      {!user ? (
+        <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 space-y-4">
+          <div className="flex items-center gap-2">
+            <Globe2 className="h-5 w-5 text-[#172D27]" />
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#141F1B]">
+                Activity Preferences · Sport &amp; City
+              </h2>
+              <p className="text-xs text-[#5B6B64]">
+                Choose your default workout mode (run, cycle, walk, hike, trail) and a single city worldwide.
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-[#5B6B64]">
+              Default Workout Mode
+            </label>
+            <WorkoutSelector
+              value={preferredWorkout}
+              onChange={(next) => {
+                setPreferredWorkout(next);
+                onSelectWorkout?.(next);
+                setGuestCityMsg(
+                  `Default workout mode set to ${getWorkoutMeta(next).fullLabel}.`
+                );
+                window.setTimeout(() => setGuestCityMsg(null), 3500);
+              }}
+            />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-xs font-semibold text-[#5B6B64]">Popular World Cities</label>
+              <select
+                value={findWorldCityPreset(city)?.name || '__custom__'}
+                onChange={(e) => {
+                  const preset = WORLD_RUNNING_CITIES.find((c) => c.name === e.target.value);
+                  if (preset) {
+                    applySelectedCity(preset.name, preset.lat, preset.lng, preset.country);
+                  }
+                }}
+                className="mt-1 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 text-sm"
+              >
+                {!findWorldCityPreset(city) && (
+                  <option value="__custom__">{city} (Custom Search)</option>
+                )}
+                {WORLD_RUNNING_CITIES.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}, {c.country}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-[#5B6B64]">
+                Or Search Any City Worldwide
+              </label>
+              <div className="mt-1">
+                <PlaceSearchInput
+                  mode="city"
+                  value={city}
+                  placeholder="Type any city (e.g. Austin, Kyoto, Vienna)..."
+                  onSelect={(loc) => applySelectedCity(loc.city || loc.name, loc.lat, loc.lng)}
+                />
+              </div>
+            </div>
+          </div>
+
+          <WorldCityMapPicker
+            selectedCity={{ name: city, lat: cityCoords.lat, lng: cityCoords.lng }}
+            onPickCity={(picked) =>
+              applySelectedCity(picked.name, picked.lat, picked.lng, picked.country)
+            }
+            heightClass="h-[260px] sm:h-[300px]"
+          />
+
+          <div className="rounded-xl bg-[#F6F5F0] px-3.5 py-2.5 text-xs text-[#30483E]">
+            Active Running City: <strong className="text-[#172D27]">{city}</strong>{' '}
+            <span className="font-mono text-[11px] text-[#5B6B64]">
+              ({cityCoords.lat.toFixed(3)}, {cityCoords.lng.toFixed(3)})
+            </span>
+            <span className="block mt-0.5 text-[11px] text-[#5B6B64]">
+              All routes, Run Art shapes, and map measurements stay strictly inside {city}.
+            </span>
+          </div>
+
+          {guestCityMsg && <p className="text-xs font-semibold text-[#30483E]">{guestCityMsg}</p>}
+        </section>
+      ) : (
         <div className="grid gap-6 lg:grid-cols-2">
           <form
             onSubmit={handleSavePreferences}
             className="rounded-2xl border border-[#E5E3DC] bg-white p-5 space-y-4"
           >
             <h2 className="font-display text-lg font-bold text-[#141F1B]">Running Preferences</h2>
-            <div>
-              <label className="text-xs font-semibold text-[#5B6B64]">Display Name</label>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="mt-1 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] px-3 text-sm"
-              />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-xs font-semibold text-[#5B6B64]">Display Name</label>
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="mt-1 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] px-3 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-[#5B6B64]">
+                  Unique Username (for friends to find you)
+                </label>
+                <div className="mt-1 flex min-h-[44px] items-center rounded-xl border border-[#D9D7CE] bg-white px-3 focus-within:border-[#172D27]">
+                  <AtSign className="mr-1.5 h-4 w-4 shrink-0 text-[#5B6B64]" />
+                  <input
+                    type="text"
+                    value={usernameInput}
+                    onChange={(e) =>
+                      setUsernameInput(
+                        e.target.value.replace(/^@+/, '').toLowerCase().replace(/[^a-z0-9_]/g, '')
+                      )
+                    }
+                    placeholder="your_handle"
+                    maxLength={24}
+                    className="w-full bg-transparent font-mono text-sm text-[#141F1B] focus:outline-none"
+                  />
+                </div>
+                {usernameStatus.state !== 'idle' && usernameStatus.message && (
+                  <p
+                    className={`mt-1 flex items-center gap-1 text-[11px] font-semibold ${
+                      usernameStatus.state === 'available' || usernameStatus.state === 'own'
+                        ? 'text-[#30483E]'
+                        : usernameStatus.state === 'checking'
+                        ? 'text-[#5B6B64]'
+                        : 'text-red-700'
+                    }`}
+                  >
+                    {(usernameStatus.state === 'taken' || usernameStatus.state === 'invalid') && (
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    )}
+                    {(usernameStatus.state === 'available' || usernameStatus.state === 'own') && (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    )}
+                    {usernameStatus.message}
+                  </p>
+                )}
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
                 <label className="text-xs font-semibold text-[#5B6B64]">Distance Units</label>
                 <select
@@ -267,15 +1006,75 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-semibold text-[#5B6B64]">Running City</label>
+                <label className="text-xs font-semibold text-[#5B6B64]">
+                  Running City (Preset or Search Any City)
+                </label>
                 <select
-                  value={city}
-                  onChange={(e) => setCity(e.target.value as CityName)}
-                  className="mt-1 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] px-3 text-sm"
+                  value={findWorldCityPreset(city)?.name || '__custom__'}
+                  onChange={(e) => {
+                    const preset = WORLD_RUNNING_CITIES.find((c) => c.name === e.target.value);
+                    if (preset) {
+                      applySelectedCity(preset.name, preset.lat, preset.lng, preset.country);
+                    }
+                  }}
+                  className="mt-1 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 text-sm"
                 >
-                  <option value="Chandigarh">Chandigarh</option>
+                  {!findWorldCityPreset(city) && (
+                    <option value="__custom__">{city} (Custom Search)</option>
+                  )}
+                  {WORLD_RUNNING_CITIES.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name}, {c.country}
+                    </option>
+                  ))}
                 </select>
               </div>
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-[#5B6B64]">
+                Search Any Single City Worldwide
+              </label>
+              <div className="mt-1">
+                <PlaceSearchInput
+                  mode="city"
+                  value={city}
+                  placeholder="Type any city in the world (e.g. Paris, Austin, Tokyo)..."
+                  onSelect={(loc) => applySelectedCity(loc.city || loc.name, loc.lat, loc.lng)}
+                />
+              </div>
+              <p className="mt-1 text-[11px] text-[#5B6B64]">
+                Selected city: <strong className="text-[#172D27]">{city}</strong> (
+                {cityCoords.lat.toFixed(3)}, {cityCoords.lng.toFixed(3)}) · Routes stay inside {city}.
+              </p>
+              {profile?.city && city !== profile.city && (
+                <p className="mt-1 text-[11px] font-semibold text-amber-800">
+                  Unsaved city change — click Save Preferences below to apply {city}.
+                </p>
+              )}
+            </div>
+
+            <WorldCityMapPicker
+              selectedCity={{ name: city, lat: cityCoords.lat, lng: cityCoords.lng }}
+              onPickCity={(picked) =>
+                applySelectedCity(picked.name, picked.lat, picked.lng, picked.country)
+              }
+              heightClass="h-[250px] sm:h-[280px]"
+            />
+
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold text-[#5B6B64]">
+                Default Workout Mode
+              </label>
+              <WorkoutSelector
+                value={preferredWorkout}
+                onChange={(next) => {
+                  setPreferredWorkout(next);
+                  onSelectWorkout?.(next);
+                  setPrefSavedMsg(null);
+                  setPrefErrorMsg(null);
+                }}
+              />
             </div>
 
             <div>
@@ -288,11 +1087,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ onOpenAuth }) => {
               />
             </div>
 
+            {prefErrorMsg && <p className="text-xs font-semibold text-red-700">{prefErrorMsg}</p>}
             {prefSavedMsg && <p className="text-xs font-semibold text-[#30483E]">{prefSavedMsg}</p>}
             <button
               type="submit"
-              disabled={savingPref}
-              className="min-h-[44px] rounded-xl bg-[#172D27] px-5 text-xs font-semibold text-[#9AE62E]"
+              disabled={
+                savingPref ||
+                usernameStatus.state === 'taken' ||
+                usernameStatus.state === 'invalid' ||
+                usernameStatus.state === 'checking'
+              }
+              className="min-h-[44px] rounded-xl bg-[#172D27] px-5 text-xs font-semibold text-[#9AE62E] disabled:opacity-50"
             >
               {savingPref ? 'Saving...' : 'Save Preferences'}
             </button>

@@ -1,10 +1,12 @@
+import { formatSpeed, getWorkoutMeta } from '../data/workouts';
 import {
   computeKmMarkers,
   formatDistance,
   formatDuration,
+  formatElevationGain,
   formatPace,
 } from '../lib/geo';
-import type { LatLngLiteral, SplitRecord } from '../types/run';
+import type { LatLngLiteral, SplitRecord, WorkoutType } from '../types/run';
 
 export type ShareCardStyle = 'route' | 'splits' | 'adidas_poster' | 'pace_chart';
 
@@ -17,12 +19,13 @@ export interface ShareCardStyleMeta {
 export const SHARE_CARD_STYLES: ShareCardStyleMeta[] = [
   { id: 'route', label: 'Route Map', shortDesc: 'Map trace & 1K pins' },
   { id: 'splits', label: 'KM Splits', shortDesc: 'Adidas-style split bars' },
-  { id: 'adidas_poster', label: 'Run Poster', shortDesc: 'Bold workout poster' },
-  { id: 'pace_chart', label: 'Pace Chart', shortDesc: 'KM pace progression' },
+  { id: 'adidas_poster', label: 'Workout Poster', shortDesc: 'Bold activity poster' },
+  { id: 'pace_chart', label: 'Pace Chart', shortDesc: 'KM split progression' },
 ];
 
 export interface ShareCardRenderInput {
   style?: ShareCardStyle;
+  workoutType?: WorkoutType;
   title: string;
   subtitle: string;
   path: LatLngLiteral[];
@@ -36,6 +39,8 @@ export interface ShareCardRenderInput {
   durationSec?: number;
   avgPaceSecPerKm?: number;
   avgSpeedKmh?: number;
+  caloriesKcal?: number;
+  elevationGainMeters?: number | null;
   splits?: SplitRecord[];
 }
 
@@ -128,7 +133,7 @@ export function buildSplitShareSummary(splits: SplitRecord[] = []): SplitSummary
 }
 
 export function sanitizeShareFilename(filename: string): string {
-  const clean = (filename || 'tricity-run.png').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const clean = (filename || 'open-run.png').replace(/[^a-zA-Z0-9._-]/g, '_');
   return clean.endsWith('.png') ? clean : `${clean}.png`;
 }
 
@@ -341,11 +346,14 @@ function renderRouteStyleCard(
   safePath: LatLngLiteral[],
   safeIntended: LatLngLiteral[]
 ): void {
-  const safeTitle = String(input.title || 'Chandigarh Run').slice(0, 34);
-  const safeSubtitle = String(input.subtitle || 'TRICITY RUN  ·  CHANDIGARH ACTIVITY').slice(0, 56);
+  const meta = getWorkoutMeta(input.workoutType);
+  const safeTitle = String(input.title || `GPS ${meta.label}`).slice(0, 34);
+  const safeSubtitle = String(
+    input.subtitle || `OPEN RUN  ·  ${meta.fullLabel.toUpperCase()}`
+  ).slice(0, 56);
   const safePrimary = String(input.primaryStatValue || '0.00 km');
   const safeSecondary = String(input.secondaryLine || '');
-  const safeFooter = String(input.footerText || 'Chandigarh');
+  const safeFooter = String(input.footerText || 'World');
 
   ctx.fillStyle = '#172D27';
   ctx.fillRect(0, 0, 1080, 1080);
@@ -398,13 +406,13 @@ function renderRouteStyleCard(
     ctx.lineWidth = 3;
     ctx.stroke();
     ctx.fillStyle = '#9AE62E';
-    ctx.font = '700 28px monospace';
+    ctx.font = '700 26px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('COMPLETED RUN', 540, 448);
+    ctx.fillText(`COMPLETED ${meta.pastNoun.toUpperCase()}`, 540, 448);
     ctx.fillStyle = '#B8E8C7';
     ctx.font = '500 22px sans-serif';
-    ctx.fillText('CHANDIGARH', 540, 488);
+    ctx.fillText('OPEN RUN', 540, 488);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
   }
@@ -416,13 +424,20 @@ function renderRouteStyleCard(
   ctx.lineTo(1008, 735);
   ctx.stroke();
 
+  const unit = input.unit || 'km';
+  const hasElev =
+    typeof input.elevationGainMeters === 'number' &&
+    Number.isFinite(input.elevationGainMeters) &&
+    input.elevationGainMeters > 0;
+  const elevChip = hasElev ? `  ·  ELEV ${formatElevationGain(input.elevationGainMeters, unit)}` : '';
+
   ctx.fillStyle = '#9AE62E';
   ctx.font = '700 84px monospace';
   ctx.fillText(safePrimary, 72, 835);
 
   ctx.fillStyle = '#FFFFFF';
-  ctx.font = '600 32px monospace';
-  ctx.fillText(safeSecondary, 72, 908);
+  ctx.font = '600 30px monospace';
+  ctx.fillText(`${safeSecondary}${elevChip}`.slice(0, 56), 72, 908);
 
   ctx.fillStyle = '#B8E8C7';
   ctx.font = '500 24px sans-serif';
@@ -435,8 +450,10 @@ function renderKmSplitsStyleCard(
   safePath: LatLngLiteral[]
 ): void {
   const unit = input.unit || 'km';
-  const safeTitle = String(input.title || 'Chandigarh Run').slice(0, 32);
-  const safeFooter = String(input.footerText || 'Chandigarh').slice(0, 56);
+  const meta = getWorkoutMeta(input.workoutType);
+  const isCycling = meta.primaryMetric === 'speed';
+  const safeTitle = String(input.title || `GPS ${meta.label}`).slice(0, 32);
+  const safeFooter = String(input.footerText || 'World').slice(0, 56);
   const distText =
     typeof input.distanceMeters === 'number'
       ? formatDistance(input.distanceMeters, unit)
@@ -444,9 +461,16 @@ function renderKmSplitsStyleCard(
   const durText =
     typeof input.durationSec === 'number' ? formatDuration(input.durationSec) : '--:--';
   const avgPaceText =
-    typeof input.avgPaceSecPerKm === 'number'
+    typeof input.avgPaceSecPerKm === 'number' && input.avgPaceSecPerKm > 0
       ? `${formatPace(input.avgPaceSecPerKm, unit)}/${unit}`
       : '--:--';
+  const computedKmh =
+    typeof input.avgSpeedKmh === 'number' && input.avgSpeedKmh > 0
+      ? input.avgSpeedKmh
+      : typeof input.avgPaceSecPerKm === 'number' && input.avgPaceSecPerKm > 0
+      ? 3600 / input.avgPaceSecPerKm
+      : 0;
+  const avgSpeedText = computedKmh > 0 ? formatSpeed(computedKmh, unit) : `-- ${unit === 'mi' ? 'mph' : 'km/h'}`;
 
   const splitSummary = buildSplitShareSummary(input.splits || []);
 
@@ -461,7 +485,7 @@ function renderKmSplitsStyleCard(
 
   ctx.fillStyle = '#9AE62E';
   ctx.font = '700 22px monospace';
-  ctx.fillText('KM SPLITWISE PACE  ·  TRICITY RUN', 72, 88);
+  ctx.fillText(`KM SPLITWISE  ·  OPEN RUN  ·  ${meta.label.toUpperCase()}`, 72, 88);
 
   ctx.fillStyle = '#FFFFFF';
   ctx.font = '700 44px sans-serif';
@@ -475,8 +499,8 @@ function renderKmSplitsStyleCard(
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  const kpiLabels = ['DISTANCE', 'DURATION', 'AVG PACE'];
-  const kpiValues = [distText, durText, avgPaceText];
+  const kpiLabels = ['DISTANCE', 'DURATION', isCycling ? 'AVG SPEED' : 'AVG PACE'];
+  const kpiValues = [distText, durText, isCycling ? avgSpeedText : avgPaceText];
   const kpiColors = ['#9AE62E', '#FFFFFF', '#FFFFFF'];
   for (let i = 0; i < 3; i++) {
     const x = 104 + i * 310;
@@ -485,7 +509,7 @@ function renderKmSplitsStyleCard(
     ctx.fillText(kpiLabels[i], x, 222);
 
     ctx.fillStyle = kpiColors[i];
-    ctx.font = '700 42px monospace';
+    ctx.font = '700 40px monospace';
     ctx.fillText(kpiValues[i], x, 276);
   }
 
@@ -502,7 +526,7 @@ function renderKmSplitsStyleCard(
     ctx.fillStyle = '#B8E8C7';
     ctx.font = '700 18px monospace';
     ctx.fillText('KM', 104, 376);
-    ctx.fillText('PACE EFFORT', 220, 376);
+    ctx.fillText(isCycling ? 'SPEED EFFORT' : 'PACE EFFORT', 220, 376);
     ctx.fillText(`PACE (/${unit.toUpperCase()})`, 708, 376);
     ctx.fillText('SPLIT', 892, 376);
 
@@ -581,11 +605,11 @@ function renderKmSplitsStyleCard(
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '700 28px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Run Distance Under 1.00 KM', 540, 760);
+    ctx.fillText(`${meta.pastNoun} Distance Under 1.00 KM`, 540, 760);
     ctx.fillStyle = '#B8E8C7';
     ctx.font = '500 21px sans-serif';
     ctx.fillText(
-      `Complete 1 km+ runs to unlock full KM split bars · Avg Pace ${avgPaceText}`,
+      `Complete 1 km+ workouts to unlock KM split bars · ${isCycling ? `Avg ${avgSpeedText}` : `Avg Pace ${avgPaceText}`}`,
       540,
       804
     );
@@ -604,8 +628,10 @@ function renderAdidasPosterStyleCard(
   safeIntended: LatLngLiteral[]
 ): void {
   const unit = input.unit || 'km';
-  const safeTitle = String(input.title || 'Chandigarh Run').slice(0, 30);
-  const safeFooter = String(input.footerText || 'Chandigarh').slice(0, 56);
+  const meta = getWorkoutMeta(input.workoutType);
+  const isCycling = meta.primaryMetric === 'speed';
+  const safeTitle = String(input.title || `GPS ${meta.label}`).slice(0, 30);
+  const safeFooter = String(input.footerText || 'World').slice(0, 56);
   const distText =
     typeof input.distanceMeters === 'number'
       ? (unit === 'mi' ? input.distanceMeters / 1609.344 : input.distanceMeters / 1000).toFixed(2)
@@ -614,17 +640,37 @@ function renderAdidasPosterStyleCard(
   const durText =
     typeof input.durationSec === 'number' ? formatDuration(input.durationSec) : '--:--';
   const avgPaceText =
-    typeof input.avgPaceSecPerKm === 'number'
+    typeof input.avgPaceSecPerKm === 'number' && input.avgPaceSecPerKm > 0
       ? `${formatPace(input.avgPaceSecPerKm, unit)}/${unit}`
       : '--:--';
+  const computedKmh =
+    typeof input.avgSpeedKmh === 'number' && input.avgSpeedKmh > 0
+      ? input.avgSpeedKmh
+      : typeof input.avgPaceSecPerKm === 'number' && input.avgPaceSecPerKm > 0
+      ? 3600 / input.avgPaceSecPerKm
+      : 0;
   const speedText =
-    typeof input.avgSpeedKmh === 'number' ? `${input.avgSpeedKmh.toFixed(1)} km/h` : '-- km/h';
+    computedKmh > 0 ? formatSpeed(computedKmh, unit) : `-- ${unit === 'mi' ? 'mph' : 'km/h'}`;
 
+  const hasElev =
+    typeof input.elevationGainMeters === 'number' &&
+    Number.isFinite(input.elevationGainMeters) &&
+    input.elevationGainMeters > 0;
   const splitSummary = buildSplitShareSummary(input.splits || []);
-  const bestSplitText =
-    splitSummary.fastestKm !== null
-      ? `KM ${splitSummary.fastestKm} · ${formatPace(splitSummary.fastestPaceSec, unit)}`
-      : `${(input.splits || []).length} splits`;
+  const bestSplitText = hasElev
+    ? formatElevationGain(input.elevationGainMeters, unit)
+    : splitSummary.fastestKm !== null
+    ? `KM ${splitSummary.fastestKm} · ${formatPace(splitSummary.fastestPaceSec, unit)}`
+    : typeof input.caloriesKcal === 'number' && input.caloriesKcal > 0
+    ? `${Math.round(input.caloriesKcal)} kcal`
+    : `${(input.splits || []).length} splits`;
+  const fourthMetricLabel = hasElev
+    ? 'ELEV GAIN'
+    : splitSummary.fastestKm !== null
+    ? 'FASTEST SPLIT'
+    : typeof input.caloriesKcal === 'number' && input.caloriesKcal > 0
+    ? 'EST CALORIES'
+    : 'COMPLETED SPLITS';
 
   // High-contrast Adidas Running poster canvas
   ctx.fillStyle = '#111D19';
@@ -647,7 +693,7 @@ function renderAdidasPosterStyleCard(
   // Brand + workout header on left
   ctx.fillStyle = '#9AE62E';
   ctx.font = '700 22px monospace';
-  ctx.fillText('TRICITY RUN  ·  CHANDIGARH', 72, 92);
+  ctx.fillText(`OPEN RUN  ·  ${meta.fullLabel.toUpperCase()}`, 72, 92);
 
   ctx.fillStyle = '#FFFFFF';
   ctx.font = '700 40px sans-serif';
@@ -671,12 +717,33 @@ function renderAdidasPosterStyleCard(
   ctx.stroke();
 
   // 2x2 Poster Telemetry Matrix
-  const metrics = [
-    { label: 'DURATION', val: durText, accent: false },
-    { label: 'AVG PACE', val: avgPaceText, accent: true },
-    { label: 'AVG SPEED', val: speedText, accent: false },
-    { label: splitSummary.fastestKm ? 'FASTEST SPLIT' : 'COMPLETED SPLITS', val: bestSplitText, accent: false },
-  ];
+  const metrics = isCycling
+    ? [
+        { label: 'DURATION', val: durText, accent: false },
+        { label: 'AVG SPEED', val: speedText, accent: true },
+        {
+          label: typeof input.caloriesKcal === 'number' && input.caloriesKcal > 0 ? 'CALORIES' : 'AVG PACE',
+          val:
+            typeof input.caloriesKcal === 'number' && input.caloriesKcal > 0
+              ? `${Math.round(input.caloriesKcal)} kcal`
+              : avgPaceText,
+          accent: false,
+        },
+        { label: fourthMetricLabel, val: bestSplitText, accent: false },
+      ]
+    : [
+        { label: 'DURATION', val: durText, accent: false },
+        { label: 'AVG PACE', val: avgPaceText, accent: true },
+        {
+          label: typeof input.caloriesKcal === 'number' && input.caloriesKcal > 0 ? 'CALORIES' : 'AVG SPEED',
+          val:
+            typeof input.caloriesKcal === 'number' && input.caloriesKcal > 0
+              ? `${Math.round(input.caloriesKcal)} kcal`
+              : speedText,
+          accent: false,
+        },
+        { label: fourthMetricLabel, val: bestSplitText, accent: false },
+      ];
 
   metrics.forEach((m, idx) => {
     const col = idx % 2;
@@ -704,16 +771,29 @@ function renderPaceChartStyleCard(
   safePath: LatLngLiteral[]
 ): void {
   const unit = input.unit || 'km';
-  const safeTitle = String(input.title || 'Chandigarh Run').slice(0, 28);
-  const safeFooter = String(input.footerText || 'Chandigarh').slice(0, 56);
+  const meta = getWorkoutMeta(input.workoutType);
+  const isCycling = meta.primaryMetric === 'speed';
+  const safeTitle = String(input.title || `GPS ${meta.label}`).slice(0, 28);
+  const safeFooter = String(input.footerText || 'World').slice(0, 56);
   const distText =
     typeof input.distanceMeters === 'number'
       ? formatDistance(input.distanceMeters, unit)
       : input.primaryStatValue;
   const avgPaceText =
-    typeof input.avgPaceSecPerKm === 'number'
+    typeof input.avgPaceSecPerKm === 'number' && input.avgPaceSecPerKm > 0
       ? `${formatPace(input.avgPaceSecPerKm, unit)}/${unit}`
       : '--:--';
+  const computedKmh =
+    typeof input.avgSpeedKmh === 'number' && input.avgSpeedKmh > 0
+      ? input.avgSpeedKmh
+      : typeof input.avgPaceSecPerKm === 'number' && input.avgPaceSecPerKm > 0
+      ? 3600 / input.avgPaceSecPerKm
+      : 0;
+  const primaryRateText = isCycling
+    ? computedKmh > 0
+      ? formatSpeed(computedKmh, unit)
+      : avgPaceText
+    : avgPaceText;
 
   const splitSummary = buildSplitShareSummary(input.splits || []);
 
@@ -723,7 +803,11 @@ function renderPaceChartStyleCard(
   // Header + compact mini route silhouette in top right
   ctx.fillStyle = '#B8E8C7';
   ctx.font = '700 22px monospace';
-  ctx.fillText('PACE PROGRESSION  ·  TRICITY RUN', 72, 88);
+  ctx.fillText(
+    `${isCycling ? 'SPLIT PROGRESSION' : 'PACE PROGRESSION'}  ·  OPEN RUN  ·  ${meta.label.toUpperCase()}`,
+    72,
+    88
+  );
 
   ctx.fillStyle = '#FFFFFF';
   ctx.font = '700 44px sans-serif';
@@ -731,7 +815,7 @@ function renderPaceChartStyleCard(
 
   ctx.fillStyle = '#9AE62E';
   ctx.font = '700 32px monospace';
-  ctx.fillText(`${distText}  ·  AVG ${avgPaceText}`, 72, 198);
+  ctx.fillText(`${distText}  ·  AVG ${primaryRateText}`, 72, 198);
 
   if (safePath.length > 1) {
     drawRoundedRect(ctx, 792, 64, 216, 170, 20);
@@ -822,10 +906,10 @@ function renderPaceChartStyleCard(
     ctx.textAlign = 'center';
     ctx.fillStyle = '#9AE62E';
     ctx.font = '700 36px monospace';
-    ctx.fillText(avgPaceText, 540, 510);
+    ctx.fillText(primaryRateText, 540, 510);
     ctx.fillStyle = '#B8E8C7';
     ctx.font = '500 22px sans-serif';
-    ctx.fillText('Log 1+ km splits during your run to plot KM pace bars', 540, 560);
+    ctx.fillText('Log 1+ km splits during your workout to plot KM bars', 540, 560);
     ctx.restore();
   }
 

@@ -5,8 +5,16 @@ import {
   MapPointDistanceCard,
   type MeasureOriginMode,
 } from '../components/MapPointDistanceCard';
+import { PlaceSearchInput } from '../components/PlaceSearchInput';
 import { TricityMap } from '../components/TricityMap';
-import { VERIFIED_TRICITY_PLACES } from '../data/tricityPlaces';
+import { WorkoutSelector } from '../components/WorkoutIcon';
+import { isInsideChandigarh, VERIFIED_TRICITY_PLACES } from '../data/tricityPlaces';
+import {
+  isChandigarhCityName,
+  isInsideSelectedCity,
+  type ActiveRunningCity,
+} from '../data/worldCities';
+import { getWorkoutMeta, normalizeWorkoutType } from '../data/workouts';
 import { createPathReport, fetchActivePathReports } from '../services/firestoreService';
 import {
   buildRouteCandidateFromPointPath,
@@ -20,17 +28,42 @@ import type {
   NamedLocation,
   PathReportDoc,
   TricityPlace,
+  WorkoutType,
 } from '../types/run';
 
 const ZONES = ['All Sectors', 'Sector 1–10', 'Sector 16–23', 'Sector 33–36'] as const;
 type ZoneFilter = (typeof ZONES)[number];
+
+function buildCityHubPlace(city: ActiveRunningCity): TricityPlace {
+  return {
+    id: `city-hub-${city.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    name: `${city.name} Running Hub`,
+    city: city.name,
+    area: city.country || 'Selected Running City',
+    lat: city.lat,
+    lng: city.lng,
+    suggestedDistancesKm: [3, 5, 10, 15],
+    surface: 'Pedestrian sidewalks, city parks & waterfront paths',
+    lighting: 'City street lighting on main avenues',
+    description:
+      city.tagline ||
+      `Explore pedestrian routes anywhere in ${city.name}. Click any point on the map or search a park above to measure paths and launch a run.`,
+    paths: ['Urban Parks', 'Pedestrian Promenades', 'Main Sidewalks'],
+    imageUrl: '',
+    lastVerified: '2026',
+    tags: ['world', 'pedestrian', 'park'],
+  };
+}
 
 interface ExploreViewProps {
   userId: string | null;
   userName: string;
   emailVerified: boolean;
   preferredUnit?: 'km' | 'mi';
-  onPlanAtPlace: (place: TricityPlace, distanceKm?: number) => void;
+  defaultWorkoutType?: WorkoutType;
+  onWorkoutChange?: (workout: WorkoutType) => void;
+  activeCity: ActiveRunningCity;
+  onPlanAtPlace: (place: TricityPlace, distanceKm?: number, workoutType?: WorkoutType) => void;
   onStartRun?: (route: GeneratedRouteCandidate) => void;
   onOpenAuth: () => void;
 }
@@ -40,15 +73,26 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
   userName,
   emailVerified,
   preferredUnit = 'km',
+  defaultWorkoutType = 'running',
+  onWorkoutChange,
+  activeCity,
   onPlanAtPlace,
   onStartRun,
   onOpenAuth,
 }) => {
   const routesLib = useMapsLibrary('routes');
+  const [workoutType, setWorkoutType] = useState<WorkoutType>(() =>
+    normalizeWorkoutType(defaultWorkoutType)
+  );
   const [zoneFilter, setZoneFilter] = useState<ZoneFilter>('All Sectors');
   const [distFilter, setDistFilter] = useState<'all' | 'short' | 'medium' | 'long'>('all');
   const [search, setSearch] = useState('');
-  const [selectedPlace, setSelectedPlace] = useState<TricityPlace>(VERIFIED_TRICITY_PLACES[0]);
+  const [globalPlaceQuery, setGlobalPlaceQuery] = useState('');
+  const [selectedPlace, setSelectedPlace] = useState<TricityPlace>(() =>
+    isChandigarhCityName(activeCity.name)
+      ? VERIFIED_TRICITY_PLACES[0]
+      : buildCityHubPlace(activeCity)
+  );
   const [reports, setReports] = useState<PathReportDoc[]>([]);
   const [showReportForm, setShowReportForm] = useState(false);
   const [issueType, setIssueType] = useState<PathReportDoc['issueType']>('construction');
@@ -63,7 +107,28 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
   const [clickedTarget, setClickedTarget] = useState<LatLngLiteral | null>(null);
   const [measuringPoint, setMeasuringPoint] = useState(false);
   const [measureResult, setMeasureResult] = useState<PointToPointMeasureResult | null>(null);
+  const [exploreError, setExploreError] = useState<string | null>(null);
   const measureSeqRef = useRef(0);
+  const isChandigarhCity = isChandigarhCityName(activeCity.name);
+
+  useEffect(() => {
+    setWorkoutType(normalizeWorkoutType(defaultWorkoutType));
+  }, [defaultWorkoutType]);
+
+  const workoutMeta = getWorkoutMeta(workoutType);
+
+  useEffect(() => {
+    setSelectedPlace(
+      isChandigarhCityName(activeCity.name)
+        ? VERIFIED_TRICITY_PLACES[0]
+        : buildCityHubPlace(activeCity)
+    );
+    setClickedTarget(null);
+    setMeasureResult(null);
+    setExploreError(null);
+    setGlobalPlaceQuery('');
+    setSearch('');
+  }, [activeCity.name, activeCity.lat, activeCity.lng]);
 
   const requestCurrentGps = useCallback(() => {
     if (!navigator.geolocation) {
@@ -75,11 +140,17 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setGpsLocating(false);
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (!isInsideSelectedCity(coords, activeCity)) {
+          setGpsMeasureError(
+            `GPS position is outside ${activeCity.name} bounds. Change Running City in Profile or pick a start inside ${activeCity.name}.`
+          );
+          return;
+        }
         setCurrentGpsLoc({
           name: 'Current GPS Location',
-          city: 'Chandigarh',
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
+          city: activeCity.name,
+          ...coords,
         });
       },
       () => {
@@ -88,7 +159,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
       },
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 }
     );
-  }, []);
+  }, [activeCity]);
 
   const selectedOriginLoc: NamedLocation = useMemo(
     () =>
@@ -113,21 +184,35 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
 
     const seq = ++measureSeqRef.current;
     setMeasuringPoint(true);
+    setExploreError(null);
     const provider = createPedestrianRoutingProvider(routesLib);
-    computeClickedPointPath(provider, selectedOriginLoc, clickedTarget, [
-      'parks_greenery',
-      'pedestrian_paths',
-    ])
+    computeClickedPointPath(
+      provider,
+      selectedOriginLoc,
+      clickedTarget,
+      ['least_turns', 'parks_greenery', 'pedestrian_paths'],
+      activeCity,
+      workoutType
+    )
       .then((res) => {
         if (measureSeqRef.current !== seq) return;
         setMeasureResult(res);
+      })
+      .catch((err) => {
+        if (measureSeqRef.current !== seq) return;
+        setMeasureResult(null);
+        setExploreError(
+          err instanceof Error
+            ? err.message
+            : `Clicked point is outside ${activeCity.name}. Keep measurements inside your selected Running City.`
+        );
       })
       .finally(() => {
         if (measureSeqRef.current === seq) {
           setMeasuringPoint(false);
         }
       });
-  }, [clickedTarget, measureOriginMode, currentGpsLoc, selectedOriginLoc, routesLib]);
+  }, [clickedTarget, measureOriginMode, currentGpsLoc, selectedOriginLoc, routesLib, activeCity, workoutType]);
 
   useEffect(() => {
     fetchActivePathReports()
@@ -135,24 +220,38 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
       .catch(() => {});
   }, []);
 
-  const filtered = VERIFIED_TRICITY_PLACES.filter((p) => {
-    if (zoneFilter === 'Sector 1–10' && !/Sector (1|3|4|10)/i.test(p.area)) return false;
-    if (zoneFilter === 'Sector 16–23' && !/Sector (16|17|23)/i.test(p.area)) return false;
-    if (zoneFilter === 'Sector 33–36' && !/Sector (33|34|35|36)/i.test(p.area)) return false;
-    if (distFilter === 'short' && !p.suggestedDistancesKm.some((d) => d <= 3)) return false;
-    if (distFilter === 'medium' && !p.suggestedDistancesKm.some((d) => d >= 5 && d <= 10)) return false;
-    if (distFilter === 'long' && !p.suggestedDistancesKm.some((d) => d >= 10)) return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      return (
-        p.name.toLowerCase().includes(q) ||
-        p.city.toLowerCase().includes(q) ||
-        p.area.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q)
-      );
+  const filtered = useMemo(() => {
+    if (!isChandigarhCity) {
+      const hub = buildCityHubPlace(activeCity);
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        const matches =
+          hub.name.toLowerCase().includes(q) ||
+          hub.city.toLowerCase().includes(q) ||
+          hub.description.toLowerCase().includes(q);
+        return matches ? [hub] : [];
+      }
+      return [hub];
     }
-    return true;
-  });
+    return VERIFIED_TRICITY_PLACES.filter((p) => {
+      if (zoneFilter === 'Sector 1–10' && !/Sector (1|3|4|10)/i.test(p.area)) return false;
+      if (zoneFilter === 'Sector 16–23' && !/Sector (16|17|23)/i.test(p.area)) return false;
+      if (zoneFilter === 'Sector 33–36' && !/Sector (33|34|35|36)/i.test(p.area)) return false;
+      if (distFilter === 'short' && !p.suggestedDistancesKm.some((d) => d <= 3)) return false;
+      if (distFilter === 'medium' && !p.suggestedDistancesKm.some((d) => d >= 5 && d <= 10)) return false;
+      if (distFilter === 'long' && !p.suggestedDistancesKm.some((d) => d >= 10)) return false;
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        return (
+          p.name.toLowerCase().includes(q) ||
+          p.city.toLowerCase().includes(q) ||
+          p.area.toLowerCase().includes(q) ||
+          p.description.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [isChandigarhCity, activeCity, search, zoneFilter, distFilter]);
 
   const handleSubmitReport = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,27 +294,71 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="font-display text-2xl font-bold text-[#141F1B]">Explore Chandigarh Running Areas</h1>
+          <h1 className="font-display text-2xl font-bold text-[#141F1B]">
+            Explore {activeCity.name} Running Areas
+          </h1>
           <p className="mt-1 text-sm text-[#5B6B64]">
-            Verified Chandigarh parks, Sukhna Lake promenade, and shaded sector green corridors.
+            Search parks, waterfronts, or neighborhoods inside {activeCity.name}, click the map to measure routes, or launch a run.
           </p>
         </div>
 
-        <div className="flex min-h-[44px] w-full items-center rounded-xl border border-[#D9D7CE] bg-white px-3 lg:w-72">
-          <Search className="mr-2 h-4 w-4 text-[#5B6B64]" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search parks or sectors..."
-            className="w-full bg-transparent text-sm focus:outline-none"
-          />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="w-full sm:w-72">
+            <PlaceSearchInput
+              value={globalPlaceQuery}
+              biasCenter={activeCity}
+              biasCityName={activeCity.name}
+              strictCity={activeCity}
+              placeholder={`Search parks & landmarks inside ${activeCity.name}...`}
+              onSelect={(loc) => {
+                setExploreError(null);
+                setGlobalPlaceQuery(loc.name);
+                setClickedTarget(null);
+                setMeasureResult(null);
+                setSelectedPlace({
+                  id: `city-place-${Date.now()}`,
+                  name: loc.name,
+                  city: activeCity.name,
+                  area: `${activeCity.name} Boundary`,
+                  lat: loc.lat,
+                  lng: loc.lng,
+                  suggestedDistancesKm: [3, 5, 10, 15],
+                  surface: 'Sidewalks, parks & pedestrian paths',
+                  lighting: 'Check local street lighting',
+                  description: `Selected point inside ${activeCity.name}. Click anywhere inside ${activeCity.name} on the map to measure pedestrian distance or launch a route loop from here.`,
+                  paths: ['Pedestrian Corridors', 'Nearby Parks'],
+                  imageUrl: '',
+                  lastVerified: '2026',
+                  tags: ['pedestrian'],
+                });
+              }}
+            />
+          </div>
+          {isChandigarhCity && (
+            <div className="flex min-h-[44px] w-full items-center rounded-xl border border-[#D9D7CE] bg-white px-3 sm:w-60">
+              <Search className="mr-2 h-4 w-4 text-[#5B6B64]" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter curated parks..."
+                className="w-full bg-transparent text-sm focus:outline-none"
+              />
+            </div>
+          )}
         </div>
       </div>
 
-      {/* City & Distance Filters */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-1.5">
+      {exploreError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-900">
+          {exploreError}
+        </div>
+      )}
+
+      {/* City & Distance Filters (Chandigarh curated areas) */}
+      {isChandigarhCity && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-1.5">
           {ZONES.map((z) => (
             <button
               key={z}
@@ -249,7 +392,21 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
             >
               {df.label}
             </button>
-          ))}
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="w-full sm:w-auto sm:min-w-[360px]">
+          <WorkoutSelector
+            value={workoutType}
+            onChange={(next) => {
+              setWorkoutType(next);
+              onWorkoutChange?.(next);
+            }}
+            compact
+          />
         </div>
       </div>
 
@@ -257,9 +414,16 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
       <div className="grid gap-6 lg:grid-cols-12">
         <div className="space-y-3 lg:col-span-7">
           <TricityMap
-            showVerifiedParks
+            showVerifiedParks={isChandigarhCity && isInsideChandigarh(selectedPlace)}
             onSelectPark={(park) => setSelectedPlace(park)}
             onMapClick={(coords) => {
+              if (!isInsideSelectedCity(coords, activeCity)) {
+                setExploreError(
+                  `Clicked point is outside ${activeCity.name}. Measurements stay inside your selected Running City.`
+                );
+                return;
+              }
+              setExploreError(null);
               setClickedTarget(coords);
               if (measureOriginMode === 'current' && !currentGpsLoc) {
                 requestCurrentGps();
@@ -268,12 +432,14 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
             measureOrigin={selectedOriginLoc}
             measureTarget={clickedTarget}
             measurePath={measureResult?.path}
+            fallbackCenter={{ lat: activeCity.lat, lng: activeCity.lng }}
             focusCenter={{ lat: selectedPlace.lat, lng: selectedPlace.lng }}
-            focusZoom={14}
+            focusZoom={13}
             heightClass="h-[320px] lg:h-[420px]"
           />
 
           <MapPointDistanceCard
+            workoutType={workoutType}
             originMode={measureOriginMode}
             startLabel={selectedPlace.name}
             onChangeOriginMode={(nextMode) => {
@@ -293,10 +459,11 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
               measureResult && onStartRun
                 ? () =>
                     onStartRun(
-                      buildRouteCandidateFromPointPath(measureResult, [
-                        'parks_greenery',
-                        'pedestrian_paths',
-                      ])
+                      buildRouteCandidateFromPointPath(
+                        measureResult,
+                        ['parks_greenery', 'pedestrian_paths'],
+                        workoutType
+                      )
                     )
                 : undefined
             }
@@ -312,7 +479,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
         <div className="rounded-2xl border border-[#E5E3DC] bg-white overflow-hidden lg:col-span-5 flex flex-col justify-between">
           <div>
             <div className="aspect-[16/9] w-full bg-[#E8ECE8]">
-              {failedImgs[`hero_${selectedPlace.id}`] ? (
+              {!selectedPlace.imageUrl || failedImgs[`hero_${selectedPlace.id}`] ? (
                 <div className="flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-[#172D27] to-[#30483E] p-4 text-center text-white">
                   <MapPin className="h-8 w-8 text-[#9AE62E]" />
                   <span className="mt-2 font-display text-sm font-bold">{selectedPlace.name}</span>
@@ -357,11 +524,23 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
           <div className="border-t border-[#F0EFEA] p-4 flex gap-2">
             <button
               type="button"
-              onClick={() => onPlanAtPlace(selectedPlace, selectedPlace.suggestedDistancesKm[1] || 5)}
+              onClick={() =>
+                onPlanAtPlace(
+                  selectedPlace,
+                  workoutType === 'cycling'
+                    ? workoutMeta.defaultDistanceKm
+                    : selectedPlace.suggestedDistancesKm[1] || workoutMeta.defaultDistanceKm,
+                  workoutType
+                )
+              }
               className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl bg-[#172D27] px-4 text-xs font-semibold text-[#9AE62E]"
             >
               <Navigation className="h-4 w-4" />
-              Plan {selectedPlace.suggestedDistancesKm[1] || 5}K Route Here
+              Plan{' '}
+              {workoutType === 'cycling'
+                ? workoutMeta.defaultDistanceKm
+                : selectedPlace.suggestedDistancesKm[1] || workoutMeta.defaultDistanceKm}
+              K {workoutMeta.label} Here
             </button>
             <button
               type="button"
@@ -486,10 +665,18 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onPlanAtPlace(place, place.suggestedDistancesKm[0] || 5)}
+                      onClick={() =>
+                        onPlanAtPlace(
+                          place,
+                          workoutType === 'cycling'
+                            ? workoutMeta.defaultDistanceKm
+                            : place.suggestedDistancesKm[0] || workoutMeta.defaultDistanceKm,
+                          workoutType
+                        )
+                      }
                       className="min-h-[36px] rounded-lg bg-[#172D27] px-3 text-xs font-semibold text-[#9AE62E]"
                     >
-                      Run Here
+                      {workoutMeta.verb} Here
                     </button>
                   </div>
                 </div>
@@ -500,21 +687,31 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
       )}
 
       {/* Community Path Alerts */}
-      {reports.length > 0 && (
-        <div className="rounded-2xl border border-[#E5E3DC] bg-white p-5">
-          <h3 className="font-display text-base font-bold text-[#141F1B]">Recent Community Path Notices</h3>
-          <div className="mt-3 divide-y divide-[#F0EFEA]">
-            {reports.slice(0, 5).map((r) => (
-              <div key={r.id} className="py-2.5 text-xs">
-                <p className="font-semibold text-[#141F1B]">
-                  {r.areaName} ({r.city}) · {r.issueType}
-                </p>
-                <p className="mt-0.5 text-[#5B6B64]">{r.description} — reported by {r.reporterName}</p>
-              </div>
-            ))}
+      {(() => {
+        const cityReports = reports.filter(
+          (r) => !r.city || r.city.toLowerCase() === activeCity.name.toLowerCase()
+        );
+        if (cityReports.length === 0) return null;
+        return (
+          <div className="rounded-2xl border border-[#E5E3DC] bg-white p-5">
+            <h3 className="font-display text-base font-bold text-[#141F1B]">
+              Recent {activeCity.name} Path Notices
+            </h3>
+            <div className="mt-3 divide-y divide-[#F0EFEA]">
+              {cityReports.slice(0, 5).map((r) => (
+                <div key={r.id} className="py-2.5 text-xs">
+                  <p className="font-semibold text-[#141F1B]">
+                    {r.areaName} ({r.city}) · {r.issueType}
+                  </p>
+                  <p className="mt-0.5 text-[#5B6B64]">
+                    {r.description} — reported by {r.reporterName}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

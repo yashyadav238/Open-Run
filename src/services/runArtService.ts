@@ -3,9 +3,15 @@ import {
   getNightSafetyStatsForPath,
   isInsideChandigarh,
   isNightHazardOrWildlifeZone,
-  isPathInsideChandigarh,
   isWaterOrRestrictedChandigarhPoint,
 } from '../data/tricityPlaces';
+import {
+  buildCityAnchorOffsets,
+  isChandigarhCityName,
+  isInsideSelectedCity,
+  isPathInsideSelectedCity,
+  type ActiveRunningCity,
+} from '../data/worldCities';
 import {
   buildGeoJsonLineString,
   computeKmMarkers,
@@ -17,6 +23,11 @@ import {
   offsetMetersToLatLng,
   resample2DCurve,
 } from '../lib/geo';
+import {
+  estimateDurationSecForWorkout,
+  getWorkoutMeta,
+  normalizeWorkoutType,
+} from '../data/workouts';
 import type {
   GeneratedRouteCandidate,
   LatLngLiteral,
@@ -24,6 +35,7 @@ import type {
   RoutePreference,
   RunArtShapeType,
   RunArtSize,
+  WorkoutType,
 } from '../types/run';
 import {
   fetchOptionalElevation,
@@ -1185,7 +1197,10 @@ export function projectShapeCenteredChandigarhGeo(
   });
 }
 
-function nearestChandigarhLandmark(pt: LatLngLiteral, fallback: string): string {
+function nearestLandmarkLabel(pt: LatLngLiteral, fallback: string): string {
+  if (!isInsideChandigarh(pt)) {
+    return fallback;
+  }
   let bestName = fallback;
   let bestDist = Infinity;
   for (const node of CHANDIGARH_WALK_NODES) {
@@ -1359,22 +1374,33 @@ export async function generateRunArtCandidates(
     anyStartAnyEnd?: boolean;
     loopCount?: number;
     nightMode?: boolean;
+    activeCity?: ActiveRunningCity;
+    workoutType?: WorkoutType;
   }
 ): Promise<RunArtGenerationResult> {
+  const workoutType = normalizeWorkoutType(options?.workoutType);
+  const workoutMeta = getWorkoutMeta(workoutType);
+  const isBike = workoutMeta.routingProfile === 'bicycle';
+  const activeCity = options?.activeCity;
+  const anyStartAnyEnd = Boolean(options?.anyStartAnyEnd);
+  if (activeCity && !anyStartAnyEnd && !isInsideSelectedCity(start, activeCity)) {
+    throw new Error(
+      `Start location "${start.name}" is outside your selected Running City (${activeCity.name}). Choose a point inside ${activeCity.name} or switch to Any Start · Any End.`
+    );
+  }
+
   const size = options?.size || 'standard';
   const seedShift = ((options?.seedOffset || 0) * 30) % 360;
   const targetMeters = Math.max(1200, Math.round(targetKm * 1000));
-  const anyStartAnyEnd = Boolean(options?.anyStartAnyEnd);
   const nightMode = Boolean(options?.nightMode);
   const artPreferences: RoutePreference[] = nightMode
     ? ['well_lit', 'pedestrian_paths']
     : ['parks_greenery', 'pedestrian_paths'];
 
-  if (!anyStartAnyEnd && !isInsideChandigarh(start)) {
-    throw new Error(
-      'Starting pin is outside Chandigarh UT. Pick a Chandigarh location or switch to Any Start · Any End.'
-    );
-  }
+  const startInChandigarh = activeCity
+    ? isChandigarhCityName(activeCity.name) && isInsideChandigarh(start)
+    : isInsideChandigarh(start);
+  const cityLabel = activeCity?.name || start.city || (startInChandigarh ? 'Chandigarh' : 'World');
 
   // Detect whether the template curve itself is open (start != end)
   const rawVerts = template.normalizedVertices;
@@ -1384,7 +1410,7 @@ export async function generateRunArtCandidates(
       0.12;
   const allowOpenEnd = anyStartAnyEnd || isCurveOpen;
 
-  // Allow repeating Run Art shapes multiple laps (`loopCount`) to reach longer distances cleanly inside Chandigarh
+  // Allow repeating Run Art shapes multiple laps (`loopCount`) to reach longer distances cleanly inside city
   const requestedLoops = Math.max(1, Math.min(8, Math.round(options?.loopCount || 1)));
   const activeLoopCount = requestedLoops;
   const perLapKm = Math.max(0.8, targetKm / activeLoopCount);
@@ -1409,9 +1435,9 @@ export async function generateRunArtCandidates(
   const snapShapeToRoads = async (geoCurve: LatLngLiteral[]): Promise<ComputeRouteOutput> => {
     if (provider.traceArtShape) {
       try {
-        return await provider.traceArtShape(geoCurve, artPreferences);
+        return await provider.traceArtShape(geoCurve, artPreferences, workoutType);
       } catch {
-        // Fallback to multi-waypoint pedestrian route if HMM unavailable
+        // Fallback to multi-waypoint route if HMM unavailable
       }
     }
     const fallbackAnchors = geoCurve.filter(
@@ -1419,7 +1445,13 @@ export async function generateRunArtCandidates(
     );
     const originPt = anyStartAnyEnd ? geoCurve[0] : start;
     const destPt = allowOpenEnd ? geoCurve[geoCurve.length - 1] : originPt;
-    return provider.computeWalkRoute(originPt, destPt, fallbackAnchors.slice(1, -1), artPreferences);
+    return provider.computeWalkRoute(
+      originPt,
+      destPt,
+      fallbackAnchors.slice(1, -1),
+      artPreferences,
+      workoutType
+    );
   };
 
   type TrialSpec = {
@@ -1429,7 +1461,18 @@ export async function generateRunArtCandidates(
 
   const trials: TrialSpec[] = [];
   const isAlphabet = template.id === 'alphabet';
-  const activeZonePool = nightMode ? CHANDIGARH_NIGHT_ART_ZONES : CHANDIGARH_ART_ZONES;
+  const activeZonePool = startInChandigarh
+    ? nightMode
+      ? CHANDIGARH_NIGHT_ART_ZONES
+      : CHANDIGARH_ART_ZONES
+    : activeCity
+    ? buildCityAnchorOffsets(activeCity)
+    : buildCityAnchorOffsets({
+        name: cityLabel === 'World' ? start.name : cityLabel,
+        lat: start.lat,
+        lng: start.lng,
+        zoom: 13,
+      });
   if (anyStartAnyEnd) {
     const zoneOffset = (options?.seedOffset || 0) % activeZonePool.length;
     const rotatedZones = [
@@ -1437,7 +1480,6 @@ export async function generateRunArtCandidates(
       ...activeZonePool.slice(0, zoneOffset),
     ];
     const selectedZones = rotatedZones.slice(0, 4);
-    // Keep Alphabet Run Art upright (0° cardinal East or 36° aligned with Chandigarh sector grid)
     const gridAngles = isAlphabet ? [0, 36] : [36, -54];
     for (const z of selectedZones) {
       for (const a of gridAngles) {
@@ -1448,7 +1490,7 @@ export async function generateRunArtCandidates(
   } else {
     const baseRotations = isAlphabet
       ? [0, 36, 18, -16]
-      : start.lng > 76.805
+      : startInChandigarh && start.lng > 76.805
       ? [-54, -144, 180, -90]
       : [36, 0, -54, 126];
     for (const r of baseRotations) {
@@ -1484,14 +1526,21 @@ export async function generateRunArtCandidates(
           size,
           detourFactor
         );
-        const invalidPts = geoVertices.filter(
-          (v) =>
-            isWaterOrRestrictedChandigarhPoint(v) ||
-            !isInsideChandigarh(v) ||
-            (nightMode && isNightHazardOrWildlifeZone(v).avoided)
-        ).length;
-        if (invalidPts > Math.floor(geoVertices.length / 8)) {
-          throw new Error('Orientation exits Chandigarh UT or enters wildlife/unlit zone.');
+        if (startInChandigarh) {
+          const invalidPts = geoVertices.filter(
+            (v) =>
+              isWaterOrRestrictedChandigarhPoint(v) ||
+              (nightMode && isNightHazardOrWildlifeZone(v).avoided)
+          ).length;
+          if (invalidPts > Math.floor(geoVertices.length / 8)) {
+            throw new Error('Orientation crosses water/restricted zone.');
+          }
+        }
+        if (activeCity) {
+          const outsideCount = geoVertices.filter((v) => !isInsideSelectedCity(v, activeCity)).length;
+          if (outsideCount > Math.floor(geoVertices.length / 10)) {
+            throw new Error(`Shape extends outside ${activeCity.name}.`);
+          }
         }
 
         let computed = await snapShapeToRoads(geoVertices);
@@ -1510,18 +1559,20 @@ export async function generateRunArtCandidates(
             size,
             detourFactor
           );
-          const calOutside = calVertices.filter(
-            (v) => isWaterOrRestrictedChandigarhPoint(v) || !isInsideChandigarh(v)
-          ).length;
-          if (calOutside <= Math.floor(calVertices.length / 8)) {
+          const calOutsideWater = startInChandigarh
+            ? calVertices.filter((v) => isWaterOrRestrictedChandigarhPoint(v)).length
+            : 0;
+          const calOutsideCity = activeCity
+            ? calVertices.filter((v) => !isInsideSelectedCity(v, activeCity)).length
+            : 0;
+          if (
+            calOutsideWater <= Math.floor(calVertices.length / 8) &&
+            calOutsideCity <= Math.floor(calVertices.length / 10)
+          ) {
             try {
               const recomputed = await snapShapeToRoads(calVertices);
               const newDiff = Math.abs(recomputed.distanceMeters - passLapMeters) / passLapMeters;
-              if (
-                newDiff < initialDiff &&
-                recomputed.path.length >= 4 &&
-                isPathInsideChandigarh(recomputed.path)
-              ) {
+              if (newDiff < initialDiff && recomputed.path.length >= 4) {
                 geoVertices = calVertices;
                 computed = recomputed;
               }
@@ -1531,8 +1582,8 @@ export async function generateRunArtCandidates(
           }
         }
 
-        if (!isPathInsideChandigarh(computed.path)) {
-          throw new Error('Snapped Run Art route exited Chandigarh UT.');
+        if (activeCity && !isPathInsideSelectedCity(computed.path, activeCity)) {
+          throw new Error(`Run Art path crosses outside ${activeCity.name}.`);
         }
 
         const scores = evaluateRunArtCandidateScores(
@@ -1608,7 +1659,7 @@ export async function generateRunArtCandidates(
       .filter((r): r is PromiseFulfilledResult<ArtEval> => r.status === 'fulfilled')
       .map((r) => r.value);
 
-    if (nightMode) {
+    if (nightMode && startInChandigarh) {
       const safeOnly = fulfilled.filter((ev) => {
         const ns = getNightSafetyStatsForPath(ev.computed.path);
         return ns.wildlifeHits === 0 && ns.desertedHits === 0;
@@ -1624,9 +1675,9 @@ export async function generateRunArtCandidates(
   let usedLoopCount = activeLoopCount;
   let valid = await attemptArtPass(usedLoopCount);
 
-  // If a large single-lap closed artwork spilled outside Chandigarh UT, automatically try 2x/3x inner laps
-  if (valid.length === 0 && usedLoopCount === 1 && !isCurveOpen && targetKm >= 6) {
-    for (const autoLoops of [2, 3]) {
+  // If a large single-lap closed artwork spilled outside selected city, automatically try 2x/3x/4x inner laps
+  if (valid.length === 0 && usedLoopCount === 1 && targetKm >= 3) {
+    for (const autoLoops of [2, 3, 4]) {
       valid = await attemptArtPass(autoLoops);
       if (valid.length > 0) {
         usedLoopCount = autoLoops;
@@ -1638,37 +1689,42 @@ export async function generateRunArtCandidates(
 
   if (valid.length === 0) {
     throw new Error(
-      `Could not form a clean connected ${template.name} (${targetKm} km) inside Chandigarh UT. Try 4–8 km, enable Any Start · Any End, or increase Loops (2×–3×).`
+      `Could not form a clean connected ${template.name} (${targetKm} km) inside ${cityLabel}. Try 3–8 km, enable Any Start · Any End, or increase Loops (2×–4×).`
     );
   }
 
   const topCandidates = valid.slice(0, 3);
   const labels = anyStartAnyEnd
-    ? ['Best Chandigarh Fit', 'Alternative Sector Grid', 'Open Alignment']
+    ? [`Best ${cityLabel} Fit`, 'Alternative Street Grid', 'Open Alignment']
     : ['Best Match', 'Grid Alignment', 'Alternative Orientation'];
 
   const lapTag = usedLoopCount > 1 ? ` (${usedLoopCount}× Laps)` : '';
 
   const routes: GeneratedRouteCandidate[] = topCandidates.map((ev, idx) => {
-    const durationSec = Math.round((ev.computed.distanceMeters / 1000) * 375);
+    const difficulty = targetKm >= 10 ? 'challenging' : targetKm >= 5 ? 'moderate' : 'easy';
+    const durationSec = estimateDurationSecForWorkout(
+      ev.computed.distanceMeters,
+      workoutType,
+      difficulty
+    );
     const actualStartPt = ev.computed.path[0] || ev.anchor;
     const actualEndPt = ev.computed.path[ev.computed.path.length - 1] || actualStartPt;
     const startName = anyStartAnyEnd
-      ? nearestChandigarhLandmark(actualStartPt, ev.anchor.name)
+      ? nearestLandmarkLabel(actualStartPt, ev.anchor.name)
       : start.name;
     const endName = allowOpenEnd
-      ? nearestChandigarhLandmark(actualEndPt, startName)
+      ? nearestLandmarkLabel(actualEndPt, startName)
       : start.name;
     const routeStart: NamedLocation = {
       name: startName,
-      city: 'Chandigarh',
+      city: cityLabel,
       lat: actualStartPt.lat,
       lng: actualStartPt.lng,
     };
     const routeEnd: NamedLocation = allowOpenEnd
       ? {
           name: endName,
-          city: 'Chandigarh',
+          city: cityLabel,
           lat: actualEndPt.lat,
           lng: actualEndPt.lng,
         }
@@ -1683,9 +1739,9 @@ export async function generateRunArtCandidates(
       `${template.name} (${size})`,
       `${ev.scores.totalScorePct}% Fréchet/HMM match`,
       usedLoopCount > 1
-        ? `${usedLoopCount}× repeated Chandigarh laps`
+        ? `${usedLoopCount}× repeated ${cityLabel} laps`
         : anyStartAnyEnd
-        ? 'Auto Chandigarh start & end'
+        ? `Auto ${cityLabel} start & end`
         : 'Closed start/finish loop',
     ].slice(0, 3);
 
@@ -1693,6 +1749,7 @@ export async function generateRunArtCandidates(
       id: `art-${template.id}-${idx}-${Date.now()}`,
       label: labels[idx] || 'Alternative',
       name,
+      workoutType,
       routeType: 'run_art',
       distanceMeters: ev.computed.distanceMeters,
       targetDistanceMeters: targetMeters,
@@ -1705,21 +1762,23 @@ export async function generateRunArtCandidates(
       geoJson: buildGeoJsonLineString(ev.computed.path, {
         name,
         routeType: 'run_art',
+        workoutType,
         distanceMeters: ev.computed.distanceMeters,
         durationSec,
+        city: cityLabel,
         routingProvider: ev.computed.providerName,
       }),
       steps: ev.computed.steps,
       kmMarkers: computeKmMarkers(ev.computed.path),
       characteristics: chars,
       surfaceSummary: nightMode
-        ? 'Well-lit Chandigarh streets & sidewalks (avoids wildlife & unlit zones)'
+        ? `Well-lit ${cityLabel} streets & ${isBike ? 'bikeways' : 'sidewalks'}`
         : usedLoopCount > 1
-        ? `${usedLoopCount}× repeated HMM-matched Chandigarh street laps`
-        : 'HMM-matched Chandigarh pedestrian streets & park footpaths',
+        ? `${usedLoopCount}× repeated HMM-matched ${cityLabel} ${isBike ? 'cycling' : 'street'} laps`
+        : `HMM-matched ${cityLabel} ${isBike ? 'bikeways & quiet streets' : 'pedestrian streets & park footpaths'}`,
       routingProvider: ev.computed.providerName,
       preferences: artPreferences,
-      difficulty: targetKm >= 10 ? 'challenging' : targetKm >= 5 ? 'moderate' : 'easy',
+      difficulty,
       toleranceDiffPct: ev.diffPct,
       matchScore: ev.scores.totalScorePct,
       shapeSimilarityNorm: ev.scores.shapeSimilarityNorm,
@@ -1729,9 +1788,9 @@ export async function generateRunArtCandidates(
       intendedShapePath: ev.geoVertices,
       approximateMatchWarning:
         usedLoopCount > activeLoopCount
-          ? `Built as ${usedLoopCount}× Chandigarh laps to keep the ${template.name} strictly inside Chandigarh UT.`
+          ? `Built as ${usedLoopCount}× ${cityLabel} laps to fit the ${template.name} cleanly onto local ${isBike ? 'bikeable' : 'pedestrian'} streets.`
           : ev.scores.totalScorePct < 70
-          ? `Approximate match (${ev.scores.totalScorePct}%): Chandigarh sector blocks adjust curves to real walkable streets. Try 5–8 km for sharper silhouettes.`
+          ? `Approximate match (${ev.scores.totalScorePct}%): local street blocks adjust curves to real roads. Try 5–8 km for sharper silhouettes.`
           : undefined,
     };
   });
@@ -1761,7 +1820,9 @@ export function exportRunArtPng(
   distanceKm: number,
   matchScore: number,
   intended: LatLngLiteral[],
-  actual: LatLngLiteral[]
+  actual: LatLngLiteral[],
+  cityLabel = 'WORLD',
+  sportLabel = 'RUN ART'
 ): string {
   const canvas = document.createElement('canvas');
   canvas.width = 1080;
@@ -1867,7 +1928,7 @@ export function exportRunArtPng(
 
   ctx.fillStyle = '#B8E8C7';
   ctx.font = '600 24px sans-serif';
-  ctx.fillText('TRICITY RUN  ·  CHANDIGARH RUN ART', 72, 92);
+  ctx.fillText(`OPEN RUN  ·  ${cityLabel.toUpperCase()} ${sportLabel.toUpperCase()}`, 72, 92);
 
   ctx.fillStyle = '#FFFFFF';
   ctx.font = '700 44px sans-serif';

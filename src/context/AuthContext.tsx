@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         try {
           const prof = await ensureUserProfile(
             nextUser.uid,
-            nextUser.displayName || nextUser.email?.split('@')[0] || 'Tricity Runner',
+            nextUser.displayName || nextUser.email?.split('@')[0] || 'Open Runner',
             nextUser.photoURL
           );
           setProfile(prof);
@@ -128,7 +128,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!auth.currentUser) return;
     const prof = await ensureUserProfile(
       auth.currentUser.uid,
-      auth.currentUser.displayName || 'Tricity Runner',
+      auth.currentUser.displayName || 'Open Runner',
       auth.currentUser.photoURL
     );
     setProfile(prof);

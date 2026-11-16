@@ -1,3 +1,4 @@
+import { formatSpeed, getWorkoutMeta } from '../data/workouts';
 import { TRICITY_CENTER } from '../data/tricityPlaces';
 import {
   bearingDegrees,
@@ -5,20 +6,24 @@ import {
   decodePolyline,
   formatDistance,
   formatDuration,
+  formatElevationGain,
   formatPace,
   haversineMeters,
 } from '../lib/geo';
-import type { LatLngLiteral, RunActivityDoc } from '../types/run';
+import type { LatLngLiteral, RunActivityDoc, WorkoutType } from '../types/run';
 import { formatRunDateSafe } from './shareCardService';
 
 export interface RunVideoPayload {
   id?: string;
+  workoutType?: WorkoutType;
   title: string;
   startName: string;
   finishedAt: unknown;
   distanceMeters: number;
   durationSec: number;
   avgPaceSecPerKm: number;
+  avgSpeedKmh?: number;
+  elevationGainMeters?: number | null;
   routeType: string;
   path: LatLngLiteral[];
 }
@@ -77,24 +82,34 @@ const MAX_MERCATOR_LAT = 85.05112878;
 
 export function buildVideoPayloadFromRun(run: {
   id?: string;
+  workoutType?: WorkoutType;
   routeName?: string;
   startName?: string;
   finishedAt?: unknown;
   distanceMeters: number;
   durationSec: number;
   avgPaceSecPerKm: number;
+  avgSpeedKmh?: number;
+  elevationGainMeters?: number | null;
   routeType: string;
   encodedPolyline?: string;
 }): RunVideoPayload {
   const path = run.encodedPolyline ? decodePolyline(run.encodedPolyline) : [];
+  const meta = getWorkoutMeta(run.workoutType);
   return {
     id: run.id,
-    title: run.routeName || 'Chandigarh Run',
-    startName: run.startName || 'Chandigarh',
+    workoutType: meta.id,
+    title: run.routeName || `${meta.fullLabel}`,
+    startName: run.startName || `GPS ${meta.label}`,
     finishedAt: run.finishedAt,
     distanceMeters: Math.max(0, run.distanceMeters || 0),
     durationSec: Math.max(0, run.durationSec || 0),
     avgPaceSecPerKm: Math.max(0, run.avgPaceSecPerKm || 0),
+    avgSpeedKmh: typeof run.avgSpeedKmh === 'number' ? run.avgSpeedKmh : undefined,
+    elevationGainMeters:
+      typeof run.elevationGainMeters === 'number' && Number.isFinite(run.elevationGainMeters)
+        ? Math.round(run.elevationGainMeters)
+        : null,
     routeType: run.routeType || 'circular',
     path,
   };
@@ -309,13 +324,13 @@ export function pickSupportedVideoMimeType(): VideoMimeSupport | null {
 }
 
 export function sanitizeVideoFilename(title: string, extension: 'mp4' | 'webm'): string {
-  const base = (title || 'chandigarh-run')
+  const base = (title || 'open-run')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 36);
-  const stem = base || 'chandigarh-run';
-  return `tricity-journey-${stem}.${extension}`;
+  const stem = base || 'open-run';
+  return `open-run-journey-${stem}.${extension}`;
 }
 
 export function triggerVideoDownload(url: string, filename: string): void {
@@ -849,10 +864,11 @@ export function renderJourneyFrame(
     ctx.font = '800 18px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('RUN LOG', cxy.x, cxy.y - 8);
+    const meta = getWorkoutMeta(payload.workoutType);
+    ctx.fillText(`${meta.label.toUpperCase()} LOG`, cxy.x, cxy.y - 8);
     ctx.fillStyle = '#FFFFFF';
     ctx.font = '600 13px sans-serif';
-    ctx.fillText('CHANDIGARH', cxy.x, cxy.y + 14);
+    ctx.fillText((payload.startName || 'WORLD').toUpperCase().slice(0, 14), cxy.x, cxy.y + 14);
     ctx.restore();
 
     if (t > 0.08 && t <= 0.82) {
@@ -862,15 +878,17 @@ export function renderJourneyFrame(
     }
   }
 
+  const meta = getWorkoutMeta(payload.workoutType);
+
   // 3. Top Header Bar
   ctx.save();
-  drawRoundedRect(ctx, 32, 28, 324, 42, 12);
+  drawRoundedRect(ctx, 32, 28, 356, 42, 12);
   ctx.fillStyle = 'rgba(23, 45, 39, 0.9)';
   ctx.fill();
   ctx.fillStyle = '#9AE62E';
   ctx.font = '700 14px monospace';
   ctx.textBaseline = 'middle';
-  ctx.fillText('TRICITY RUN  ·  CHANDIGARH', 48, 49);
+  ctx.fillText(`OPEN RUN  ·  ${meta.fullLabel.toUpperCase()}`, 48, 49);
 
   drawRoundedRect(ctx, width - 196, 28, 164, 42, 12);
   ctx.fillStyle = 'rgba(23, 45, 39, 0.9)';
@@ -891,8 +909,12 @@ export function renderJourneyFrame(
   ctx.fillStyle = scrimGrad;
   ctx.fillRect(0, scrimTop, width, height - scrimTop);
 
-  const safeTitle = String(payload.title || 'Chandigarh Run').slice(0, 38);
-  const safeMeta = `${formatRunDateSafe(payload.finishedAt)}  ·  ${payload.startName || 'Chandigarh'}`.slice(0, 62);
+  const safeTitle = String(payload.title || meta.fullLabel).slice(0, 38);
+  const elevSuffix =
+    typeof payload.elevationGainMeters === 'number' && payload.elevationGainMeters > 0
+      ? `  ·  ${formatElevationGain(payload.elevationGainMeters * journeyP, preferredUnit)} ELEV`
+      : '';
+  const safeMeta = `${formatRunDateSafe(payload.finishedAt)}  ·  ${payload.startName || 'GPS Route'}${elevSuffix}`.slice(0, 68);
 
   ctx.save();
   ctx.fillStyle = '#B8E8C7';
@@ -911,11 +933,27 @@ export function renderJourneyFrame(
   ctx.lineTo(width - 42, height - 134);
   ctx.stroke();
 
-  // Live Distance, Duration, Pace
+  // Live Distance, Duration, Pace or Speed
   const liveDistMeters = payload.distanceMeters * journeyP;
   const liveDurationSec = Math.round(payload.durationSec * journeyP);
-  const paceLabel =
-    journeyP > 0.02 ? `${formatPace(payload.avgPaceSecPerKm, preferredUnit)}/${preferredUnit}` : `--:--`;
+  const speedKmh =
+    typeof payload.avgSpeedKmh === 'number' && payload.avgSpeedKmh > 0
+      ? payload.avgSpeedKmh
+      : payload.avgPaceSecPerKm > 0
+      ? 3600 / payload.avgPaceSecPerKm
+      : payload.durationSec > 0
+      ? (payload.distanceMeters / 1000) / (payload.durationSec / 3600)
+      : 0;
+  const rateLabel =
+    meta.primaryMetric === 'speed'
+      ? journeyP > 0.02
+        ? formatSpeed(speedKmh, preferredUnit)
+        : preferredUnit === 'mi'
+        ? '--.- mph'
+        : '--.- km/h'
+      : journeyP > 0.02
+      ? `${formatPace(payload.avgPaceSecPerKm, preferredUnit)}/${preferredUnit}`
+      : `--:--`;
 
   const col1X = 42;
   const col2X = width * 0.39;
@@ -925,7 +963,7 @@ export function renderJourneyFrame(
   ctx.font = '600 17px sans-serif';
   ctx.fillText('DISTANCE', col1X, height - 102);
   ctx.fillText('DURATION', col2X, height - 102);
-  ctx.fillText('AVG PACE', col3X, height - 102);
+  ctx.fillText(meta.primaryMetric === 'speed' ? 'AVG SPEED' : 'AVG PACE', col3X, height - 102);
 
   ctx.fillStyle = '#9AE62E';
   ctx.font = '700 44px monospace';
@@ -934,7 +972,7 @@ export function renderJourneyFrame(
   ctx.fillStyle = '#FFFFFF';
   ctx.font = '700 44px monospace';
   ctx.fillText(formatDuration(liveDurationSec), col2X, height - 54);
-  ctx.fillText(paceLabel, col3X, height - 54);
+  ctx.fillText(rateLabel, col3X, height - 54);
 
   // Journey progress bar along bottom
   const barX = 42;

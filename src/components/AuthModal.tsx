@@ -82,7 +82,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ open, onClose }) => {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-display text-xl font-bold text-[#141F1B]">
-              {mode === 'login' ? 'Sign in to TRICITY RUN' : mode === 'register' ? 'Create Runner Account' : 'Reset Password'}
+              {mode === 'login' ? 'Sign in to OPEN RUN' : mode === 'register' ? 'Create Runner Account' : 'Reset Password'}
             </h2>
             <p className="mt-0.5 text-xs text-[#5B6B64]">Save routes, track GPS runs, and unlock challenges.</p>
           </div>

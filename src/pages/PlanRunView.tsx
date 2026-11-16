@@ -30,12 +30,23 @@ import {
 import { PlaceSearchInput } from '../components/PlaceSearchInput';
 import { ShareCardModal } from '../components/ShareCardModal';
 import { TricityMap } from '../components/TricityMap';
+import { WorkoutSelector } from '../components/WorkoutIcon';
 import {
   CHANDIGARH_NIGHT_LIT_NODES,
   isInsideChandigarh,
   isNightHazardOrWildlifeZone,
   TRICITY_START_PRESETS,
 } from '../data/tricityPlaces';
+import {
+  isChandigarhCityName,
+  isInsideSelectedCity,
+  type ActiveRunningCity,
+} from '../data/worldCities';
+import {
+  estimateCaloriesKcal,
+  getWorkoutMeta,
+  normalizeWorkoutType,
+} from '../data/workouts';
 import { douglasPeucker2D, formatDistance, formatDuration } from '../lib/geo';
 import { saveRouteToLibrary, saveRunArtDesign } from '../services/firestoreService';
 import {
@@ -68,11 +79,11 @@ import type {
   RouteType,
   RunArtShapeType,
   RunArtSize,
+  WorkoutType,
 } from '../types/run';
 
-const DISTANCE_OPTIONS = [1, 2, 3, 5, 7, 10];
-
 const PREFERENCE_OPTIONS: Array<{ id: RoutePreference; label: string }> = [
+  { id: 'least_turns', label: 'Least Turns · Straight Paths' },
   { id: 'parks_greenery', label: 'Parks & Inter-Sector Green Belts' },
   { id: 'pedestrian_paths', label: 'Footpaths & Narrow Sector Passes' },
   { id: 'quieter_roads', label: 'Quieter Roads' },
@@ -85,6 +96,7 @@ const PREFERENCE_OPTIONS: Array<{ id: RoutePreference; label: string }> = [
 
 export interface PlannerInitialRequest {
   mode: RouteMode;
+  workoutType?: WorkoutType;
   distanceKm: number;
   routeType: RouteType;
   shapeType?: RunArtShapeType;
@@ -95,25 +107,55 @@ export interface PlannerInitialRequest {
 
 interface PlanRunViewProps {
   initialRequest: PlannerInitialRequest | null;
+  defaultWorkoutType?: WorkoutType;
+  onWorkoutChange?: (workout: WorkoutType) => void;
+  activeCity: ActiveRunningCity;
   preferredUnit: 'km' | 'mi';
   userId: string | null;
   emailVerified: boolean;
   onStartRun: (route: GeneratedRouteCandidate) => void;
+  onOpenCitySettings?: () => void;
   onOpenAuth: () => void;
 }
 
 export const PlanRunView: React.FC<PlanRunViewProps> = ({
   initialRequest,
+  defaultWorkoutType = 'running',
+  onWorkoutChange,
+  activeCity,
   preferredUnit,
   userId,
   emailVerified,
   onStartRun,
+  onOpenCitySettings,
   onOpenAuth,
 }) => {
   const routesLib = useMapsLibrary('routes');
+  const isChandigarhCity = isChandigarhCityName(activeCity.name);
+  const cityDefaultStart: NamedLocation = isChandigarhCity
+    ? TRICITY_START_PRESETS[0]
+    : {
+        name: `${activeCity.name} Center`,
+        city: activeCity.name,
+        lat: activeCity.lat,
+        lng: activeCity.lng,
+      };
+  const cityDefaultEnd: NamedLocation = isChandigarhCity
+    ? TRICITY_START_PRESETS[2]
+    : {
+        name: `${activeCity.name} East`,
+        city: activeCity.name,
+        lat: activeCity.lat + 0.009,
+        lng: activeCity.lng + 0.011,
+      };
 
+  const [workoutType, setWorkoutType] = useState<WorkoutType>(() =>
+    normalizeWorkoutType(initialRequest?.workoutType ?? defaultWorkoutType)
+  );
   const [mode, setMode] = useState<RouteMode>(initialRequest?.mode || 'normal');
-  const [distanceKm, setDistanceKm] = useState<number>(initialRequest?.distanceKm || 5);
+  const [distanceKm, setDistanceKm] = useState<number>(
+    initialRequest?.distanceKm || getWorkoutMeta(initialRequest?.workoutType ?? defaultWorkoutType).defaultDistanceKm
+  );
   const [customKm, setCustomKm] = useState<string>('');
   const [shareModalCard, setShareModalCard] = useState<PreparedShareCard | null>(null);
   const [routeType, setRouteType] = useState<RouteType>(
@@ -126,10 +168,12 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
   );
   const [artSize, setArtSize] = useState<RunArtSize>('standard');
   const [startLoc, setStartLoc] = useState<NamedLocation>(
-    initialRequest?.start || TRICITY_START_PRESETS[0]
+    initialRequest?.start || cityDefaultStart
   );
-  const [endLoc, setEndLoc] = useState<NamedLocation>(TRICITY_START_PRESETS[2]);
+  const [endLoc, setEndLoc] = useState<NamedLocation>(cityDefaultEnd);
+  const prevCityKeyRef = useRef(`${activeCity.name}_${activeCity.lat.toFixed(4)}_${activeCity.lng.toFixed(4)}`);
   const [preferences, setPreferences] = useState<RoutePreference[]>([
+    'least_turns',
     'parks_greenery',
     'pedestrian_paths',
     'quieter_roads',
@@ -168,6 +212,21 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
   const [measureResult, setMeasureResult] = useState<PointToPointMeasureResult | null>(null);
   const measureSeqRef = useRef(0);
 
+  useEffect(() => {
+    setWorkoutType(normalizeWorkoutType(defaultWorkoutType));
+  }, [defaultWorkoutType]);
+
+  const workoutMeta = getWorkoutMeta(workoutType);
+
+  const handleSelectWorkout = (next: WorkoutType) => {
+    const norm = normalizeWorkoutType(next);
+    setWorkoutType(norm);
+    onWorkoutChange?.(norm);
+    if (mode === 'normal' && !customKm) {
+      setDistanceKm(getWorkoutMeta(norm).defaultDistanceKm);
+    }
+  };
+
   const requestCurrentGpsForMeasure = useCallback(() => {
     if (!navigator.geolocation) {
       setGpsMeasureError('Browser geolocation is unavailable.');
@@ -180,7 +239,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
         setGpsLocating(false);
         setCurrentGpsLoc({
           name: 'Current GPS Location',
-          city: 'Chandigarh',
+          city: activeCity.name,
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
         });
@@ -191,7 +250,40 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
       },
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 }
     );
-  }, []);
+  }, [activeCity.name]);
+
+  useEffect(() => {
+    const nextKey = `${activeCity.name}_${activeCity.lat.toFixed(4)}_${activeCity.lng.toFixed(4)}`;
+    if (prevCityKeyRef.current === nextKey) return;
+    prevCityKeyRef.current = nextKey;
+    const isChd = isChandigarhCityName(activeCity.name);
+    setStartLoc(
+      isChd
+        ? TRICITY_START_PRESETS[0]
+        : {
+            name: `${activeCity.name} Center`,
+            city: activeCity.name,
+            lat: activeCity.lat,
+            lng: activeCity.lng,
+          }
+    );
+    setEndLoc(
+      isChd
+        ? TRICITY_START_PRESETS[2]
+        : {
+            name: `${activeCity.name} East`,
+            city: activeCity.name,
+            lat: activeCity.lat + 0.009,
+            lng: activeCity.lng + 0.011,
+          }
+    );
+    setCandidates([]);
+    setSelectedId('');
+    setClickedTarget(null);
+    setMeasureResult(null);
+    setError(null);
+    setWarning(null);
+  }, [activeCity.name, activeCity.lat, activeCity.lng]);
 
   const activeMeasureOrigin: NamedLocation =
     measureOriginMode === 'current' && currentGpsLoc ? currentGpsLoc : startLoc;
@@ -213,10 +305,26 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
       ? Array.from(new Set([...preferences.filter((p) => p !== 'parks_greenery'), 'well_lit']))
       : preferences;
 
-    computeClickedPointPath(provider, activeMeasureOrigin, clickedTarget, activePrefs)
+    computeClickedPointPath(
+      provider,
+      activeMeasureOrigin,
+      clickedTarget,
+      activePrefs,
+      activeCity,
+      workoutType
+    )
       .then((res) => {
         if (measureSeqRef.current !== seq) return;
         setMeasureResult(res);
+      })
+      .catch((err) => {
+        if (measureSeqRef.current !== seq) return;
+        setMeasureResult(null);
+        setError(
+          err instanceof Error
+            ? err.message
+            : `Cannot measure path outside ${activeCity.name}. Keep pins inside ${activeCity.name} or change Running City in Profile.`
+        );
       })
       .finally(() => {
         if (measureSeqRef.current === seq) {
@@ -231,10 +339,13 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
     routesLib,
     nightMode,
     preferences,
+    activeCity,
+    workoutType,
   ]);
 
   const runGeneration = async (params: {
     activeMode: RouteMode;
+    activeWorkout?: WorkoutType;
     targetKm: number;
     type: RouteType;
     tpl: RunArtTemplate;
@@ -246,6 +357,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
     loops?: number;
     night?: boolean;
   }) => {
+    const activeSport = normalizeWorkoutType(params.activeWorkout ?? workoutType);
     setGenerating(true);
     setError(null);
     setWarning(null);
@@ -266,12 +378,15 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
           anyStartAnyEnd: params.anyStartAnyEnd ?? artAnyStartEnd,
           loopCount: activeLoops,
           nightMode: isNight,
+          activeCity,
+          workoutType: activeSport,
         });
         setCandidates(res.routes);
         setSelectedId(res.routes[0]?.id || '');
         if (res.warning) setWarning(res.warning);
       } else {
         const res = await generatePedestrianRoutes(provider, {
+          workoutType: activeSport,
           start: params.origin,
           end: params.type === 'point_to_point' ? params.dest || endLoc : undefined,
           distanceKm: params.targetKm,
@@ -282,6 +397,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
           seedOffset: params.seed,
           loopCount: activeLoops,
           nightMode: isNight,
+          activeCity,
         });
         setCandidates(res.routes);
         setSelectedId(res.routes[0]?.id || '');
@@ -292,7 +408,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
       setError(
         err instanceof Error
           ? err.message
-          : 'Could not compute a connected Chandigarh pedestrian route here. Try moving your start point onto a sector street or park.'
+          : `Could not compute a connected ${activeSport === 'cycling' ? 'bike' : 'pedestrian'} route here. Try moving your start point closer to a road, bike path, or park.`
       );
     } finally {
       setGenerating(false);
@@ -301,9 +417,13 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
 
   useEffect(() => {
     if (!initialRequest) return;
+    const reqWorkout = normalizeWorkoutType(initialRequest.workoutType ?? workoutType);
+    setWorkoutType(reqWorkout);
     setMode(initialRequest.mode);
     setDistanceKm(initialRequest.distanceKm);
-    setStartLoc(initialRequest.start);
+    const startInsideCity = isInsideSelectedCity(initialRequest.start, activeCity);
+    const effectiveStart = startInsideCity ? initialRequest.start : cityDefaultStart;
+    setStartLoc(effectiveStart);
 
     let tpl = selectedTemplate;
     let useAnyStart = artAnyStartEnd;
@@ -314,7 +434,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
       tpl = {
         id: 'alphabet',
         name: `Letters "${built.text}"`,
-        subtitle: 'Single-stroke A–Z / 0–9 letters joined cleanly along Chandigarh street blocks',
+        subtitle: 'Single-stroke A–Z / 0–9 letters joined cleanly along local street blocks',
         recommendedKm: initialRequest.distanceKm || recommendAlphabetKm(built.charCount),
         normalizedVertices: built.vertices,
       };
@@ -334,14 +454,20 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
     if (initialRequest.routeType !== 'point_to_point') {
       runGeneration({
         activeMode: initialRequest.mode,
+        activeWorkout: reqWorkout,
         targetKm: initialRequest.distanceKm,
         type: initialRequest.routeType,
         tpl,
         size: artSize,
-        origin: initialRequest.start,
+        origin: effectiveStart,
         seed: 0,
         anyStartAnyEnd: useAnyStart,
       });
+    }
+    if (!startInsideCity) {
+      setWarning(
+        `Reset start point to ${activeCity.name} because "${initialRequest.start.name}" is outside your selected Running City bounds.`
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRequest?.triggerKey]);
@@ -378,20 +504,20 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        if (!isInsideChandigarh(coords)) {
+        if (!isInsideSelectedCity(coords, activeCity)) {
           setError(
-            'Your current GPS position is outside Chandigarh UT. Pick a Chandigarh park or tap inside Chandigarh on the map.'
+            `Your current GPS location is outside ${activeCity.name} bounds. Change Running City in Profile or pick a point inside ${activeCity.name}.`
           );
           return;
         }
         setError(null);
         setStartLoc({
           name: 'Current GPS Location',
-          city: 'Chandigarh',
+          city: activeCity.name,
           ...coords,
         });
       },
-      () => setError('Location permission denied. Select a Chandigarh park or tap the map.'),
+      () => setError('Location permission denied. Search any city/place or tap the map.'),
       { enableHighAccuracy: true, timeout: 8000 }
     );
   };
@@ -405,12 +531,14 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
       setError('Please verify your email address (or use Google Sign-In) before saving routes.');
       return;
     }
+    const routeCity = route.start.city || startLoc.city || activeCity.name;
     setSavingId(route.id);
     try {
       await saveRouteToLibrary(userId, {
+        workoutType: route.workoutType || workoutType,
         name: route.name,
         notes: `${route.surfaceSummary} · ${route.characteristics.join(', ')}`,
-        city: 'Chandigarh',
+        city: routeCity,
         routeType: route.routeType,
         distanceMeters: route.distanceMeters,
         durationSec: route.durationSec,
@@ -430,7 +558,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
         await saveRunArtDesign(userId, {
           shapeType: selectedTemplate.id,
           title: route.name.slice(0, 100),
-          city: 'Chandigarh',
+          city: routeCity,
           startLat: route.start.lat,
           startLng: route.start.lng,
           targetDistanceKm: effectiveKm,
@@ -465,32 +593,39 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
   };
 
   const handleDownloadArtwork = (route: GeneratedRouteCandidate) => {
+    const cityTag = route.start.city || activeCity.name || 'WORLD';
+    const routeSportMeta = getWorkoutMeta(route.workoutType || workoutType);
     const url = exportRunArtPng(
       route.name,
       route.distanceMeters / 1000,
       route.matchScore || 0,
       route.intendedShapePath || [],
-      route.path
+      route.path,
+      cityTag,
+      routeSportMeta.artNamePrefix.toUpperCase()
     );
     if (!url) return;
     const a = document.createElement('a');
     a.href = url;
-    a.download = `tricity-run-art-${selectedTemplate.id}.png`;
+    a.download = `open-run-art-${selectedTemplate.id}.png`;
     a.click();
   };
 
   const handleShareRoute = async (route: GeneratedRouteCandidate) => {
-    const summaryText = `${route.name} — ${formatDistance(route.distanceMeters, preferredUnit)} (${route.routeType.replace('_', ' ')}) on TRICITY RUN Chandigarh.`;
+    const cityTag = route.start.city || activeCity.name || 'World';
+    const routeSportMeta = getWorkoutMeta(route.workoutType || workoutType);
+    const summaryText = `${route.name} — ${formatDistance(route.distanceMeters, preferredUnit)} (${routeSportMeta.fullLabel}) on OPEN RUN ${cityTag}.`;
     const { outcome, prepared } = await sharePngCard({
       filename: `${route.id}.png`,
       shareTitle: route.name,
       shareText: summaryText,
       card: {
+        workoutType: route.workoutType || workoutType,
         title: route.name,
         subtitle:
           route.routeType === 'run_art'
-            ? 'TRICITY RUN  ·  CHANDIGARH RUN ART'
-            : 'TRICITY RUN  ·  CHANDIGARH ROUTE',
+            ? `OPEN RUN  ·  ${cityTag.toUpperCase()} ${routeSportMeta.artNamePrefix.toUpperCase()}`
+            : `OPEN RUN  ·  ${cityTag.toUpperCase()} ${routeSportMeta.label.toUpperCase()} ROUTE`,
         path: route.path,
         intendedPath: route.intendedShapePath,
         badgeText:
@@ -520,8 +655,8 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
         id: 'alphabet',
         name: `Letters "${built.text}"`,
         subtitle: artAnyStartEnd
-          ? 'Single-stroke letters auto-placed along Chandigarh’s clearest street blocks'
-          : 'Single-stroke letters anchored at your Chandigarh starting point',
+          ? 'Single-stroke letters auto-placed along clear local street blocks'
+          : 'Single-stroke letters anchored at your chosen starting point',
         recommendedKm: effectiveKm || recommendAlphabetKm(built.charCount),
         normalizedVertices: built.vertices,
       };
@@ -537,8 +672,8 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
         id: 'custom',
         name: 'Custom Sketch',
         subtitle: artAnyStartEnd
-          ? 'Open or closed drawing auto-placed anywhere in Chandigarh (no loop needed)'
-          : 'Freehand drawing snapped onto Chandigarh pedestrian paths via HMM',
+          ? 'Open or closed drawing auto-placed near your city (no loop needed)'
+          : 'Freehand drawing snapped onto walkable pedestrian paths via HMM',
         recommendedKm: effectiveKm || 5,
         normalizedVertices: normalized,
       };
@@ -548,7 +683,11 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
     setSeedOffset(nextSeed);
     runGeneration({
       activeMode: mode,
-      targetKm: Math.min(60, Math.max(0.5, effectiveKm || 5)),
+      activeWorkout: workoutType,
+      targetKm: Math.min(
+        workoutMeta.maxPlanKm,
+        Math.max(0.5, effectiveKm || workoutMeta.defaultDistanceKm)
+      ),
       type: routeType,
       tpl: activeTpl,
       size: artSize,
@@ -566,8 +705,26 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
       {/* Left Unified Planner Controls */}
       <div className="space-y-4 lg:col-span-5">
         <div className="rounded-2xl border border-[#E5E3DC] bg-white p-5">
-          <div className="flex items-center justify-between">
-            <h1 className="font-display text-xl font-bold text-[#141F1B]">Chandigarh Route Engine</h1>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h1 className="font-display text-xl font-bold text-[#141F1B]">
+                {activeCity.name} Route Engine
+              </h1>
+              <p className="text-[11px] font-medium text-[#5B6B64]">
+                Routes kept strictly inside {activeCity.name} ·{' '}
+                {onOpenCitySettings ? (
+                  <button
+                    type="button"
+                    onClick={onOpenCitySettings}
+                    className="font-semibold text-[#30483E] underline"
+                  >
+                    Change Running City
+                  </button>
+                ) : (
+                  'Single-city boundary active'
+                )}
+              </p>
+            </div>
             {mode === 'normal' && (
               <button
                 type="button"
@@ -580,8 +737,13 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
             )}
           </div>
 
-          {/* Unified Mode Switch: Normal Run vs Run Art */}
-          <div className="mt-4 grid grid-cols-2 gap-1.5 rounded-xl bg-[#F6F5F0] p-1">
+          {/* Sport / Workout Selector */}
+          <div className="mt-3.5">
+            <WorkoutSelector value={workoutType} onChange={handleSelectWorkout} compact />
+          </div>
+
+          {/* Unified Mode Switch: Normal Route vs GPS Art */}
+          <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-xl bg-[#F6F5F0] p-1">
             <button
               type="button"
               onClick={() => setMode('normal')}
@@ -592,7 +754,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
               }`}
             >
               <RouteIcon className="h-4 w-4" />
-              Normal Run
+              Normal {workoutMeta.verb}
             </button>
             <button
               type="button"
@@ -604,11 +766,11 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
               }`}
             >
               <Palette className="h-4 w-4" />
-              Run Art
+              {workoutMeta.artNamePrefix}
             </button>
           </div>
 
-          {/* Night Run Mode Toggle (Normal Run & Run Art) */}
+          {/* Night Safety Mode Toggle */}
           <div
             className={`mt-3 rounded-xl border p-3 transition-colors ${
               nightMode
@@ -627,7 +789,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 </div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-bold">Night Run Mode</span>
+                    <span className="text-xs font-bold">Night {workoutMeta.verb} Mode</span>
                     {nightMode && <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-[#9AE62E]" />}
                   </div>
                   <p className={`text-[11px] leading-snug ${nightMode ? 'text-[#B8E8C7]' : 'text-[#5B6B64]'}`}>
@@ -656,6 +818,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
 
             {nightMode &&
               !(mode === 'run_art' && artAnyStartEnd) &&
+              isInsideChandigarh(startLoc) &&
               (() => {
                 const haz = isNightHazardOrWildlifeZone(startLoc);
                 if (!haz.avoided) return null;
@@ -771,7 +934,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                       setSelectedTemplate({
                         id: 'alphabet',
                         name: `Letters "${built.text}"`,
-                        subtitle: 'Run single letters (A–Z) or short words along upright Chandigarh streets',
+                        subtitle: 'Run single letters (A–Z) or short words along upright local streets',
                         recommendedKm: recKm,
                         normalizedVertices: built.vertices,
                       });
@@ -839,7 +1002,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 </div>
                 <p className="mt-1 px-1 text-[10px] text-[#5B6B64]">
                   {artAnyStartEnd
-                    ? 'Auto-places your drawing or letters on the best Chandigarh streets — open ends & any start allowed.'
+                    ? `Auto-places your drawing or letters on clean streets around ${startLoc.city || activeCity.name} — open ends & any start allowed.`
                     : 'Starts and finishes anchored at your chosen Start Location.'}
                 </p>
               </div>
@@ -859,7 +1022,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                   setSelectedTemplate({
                     id: 'alphabet',
                     name: nextBuilt.text ? `Letters "${nextBuilt.text}"` : 'Letters',
-                    subtitle: 'Run single letters (A–Z) or short words along upright Chandigarh streets',
+                    subtitle: 'Run single letters (A–Z) or short words along upright local streets',
                     recommendedKm: recKm,
                     normalizedVertices: nextBuilt.vertices,
                   });
@@ -1074,7 +1237,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 </span>
               </div>
               <div className="mt-2 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-                {DISTANCE_OPTIONS.map((km) => (
+                {workoutMeta.distancePresetsKm.map((km) => (
                   <button
                     key={km}
                     type="button"
@@ -1095,11 +1258,11 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
               <input
                 type="number"
                 min={0.5}
-                max={60}
+                max={workoutMeta.maxPlanKm}
                 step={0.5}
                 value={customKm}
                 onChange={(e) => setCustomKm(e.target.value)}
-                placeholder="Or enter custom km (0.5 – 60)"
+                placeholder={`Or enter custom km (0.5 – ${workoutMeta.maxPlanKm})`}
                 className="mt-2 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] px-3 font-mono text-sm focus:border-[#172D27] focus:outline-none"
               />
 
@@ -1135,11 +1298,13 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
             </div>
           )}
 
-          {/* Start Point (Auto-placed across Chandigarh when Any Start · Any End is active) */}
+          {/* Start Point (Auto-placed when Any Start · Any End is active) */}
           {mode === 'run_art' && artAnyStartEnd ? (
             <div className="mt-4 rounded-xl border border-[#E5E3DC] bg-[#F6F5F0] px-3.5 py-2.5 text-xs text-[#30483E]">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold text-[#172D27]">Start & Finish: Auto Chandigarh Best-Fit</span>
+                <span className="font-semibold text-[#172D27]">
+                  Start &amp; Finish: Auto {startLoc.city || activeCity.name} Best-Fit
+                </span>
                 <button
                   type="button"
                   onClick={() => setArtAnyStartEnd(false)}
@@ -1149,7 +1314,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 </button>
               </div>
               <p className="mt-0.5 text-[11px] text-[#5B6B64]">
-                No start or end pin required — the engine scans Sector 17, 22, 16, 33, 35 & 10 to find the cleanest street fit.
+                No start or end pin required — the engine scans connected street grids around {startLoc.name} to find the cleanest fit.
               </p>
             </div>
           ) : (
@@ -1180,31 +1345,39 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
 
               <PlaceSearchInput
                 value={startLoc.name}
-                placeholder="Search Chandigarh sectors, Sukhna Lake, Rose Garden..."
-                onSelect={(loc) => setStartLoc({ ...loc, city: 'Chandigarh' })}
+                biasCenter={activeCity}
+                biasCityName={activeCity.name}
+                strictCity={activeCity}
+                placeholder={`Search start places inside ${activeCity.name}...`}
+                onSelect={(loc) => {
+                  setError(null);
+                  setStartLoc({ ...loc, city: activeCity.name });
+                }}
               />
 
-              <select
-                value={
-                  TRICITY_START_PRESETS.some((p) => p.name === startLoc.name)
-                    ? startLoc.name
-                    : ''
-                }
-                onChange={(e) => {
-                  const found = TRICITY_START_PRESETS.find((p) => p.name === e.target.value);
-                  if (found) setStartLoc(found);
-                }}
-                className="min-h-[42px] w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 text-xs font-medium text-[#141F1B]"
-              >
-                <option value="" disabled>
-                  Or choose verified Chandigarh park...
-                </option>
-                {TRICITY_START_PRESETS.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name}
+              {isChandigarhCity && (
+                <select
+                  value={
+                    TRICITY_START_PRESETS.some((p) => p.name === startLoc.name)
+                      ? startLoc.name
+                      : ''
+                  }
+                  onChange={(e) => {
+                    const found = TRICITY_START_PRESETS.find((p) => p.name === e.target.value);
+                    if (found) setStartLoc(found);
+                  }}
+                  className="min-h-[42px] w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 text-xs font-medium text-[#141F1B]"
+                >
+                  <option value="" disabled>
+                    Or choose curated Chandigarh park...
                   </option>
-                ))}
-              </select>
+                  {TRICITY_START_PRESETS.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           )}
 
@@ -1214,8 +1387,14 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
               <span className="text-xs font-semibold text-[#5B6B64]">Destination Location</span>
               <PlaceSearchInput
                 value={endLoc.name}
-                placeholder="Search destination in Chandigarh..."
-                onSelect={(loc) => setEndLoc({ ...loc, city: 'Chandigarh' })}
+                biasCenter={startLoc}
+                biasCityName={activeCity.name}
+                strictCity={activeCity}
+                placeholder={`Search destination inside ${activeCity.name}...`}
+                onSelect={(loc) => {
+                  setError(null);
+                  setEndLoc({ ...loc, city: activeCity.name });
+                }}
               />
             </div>
           )}
@@ -1224,10 +1403,13 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
           {mode === 'normal' && showFilters && (
             <div className="mt-4 space-y-3 border-t border-[#E5E3DC] pt-4">
               <div>
-                <p className="text-xs font-semibold text-[#5B6B64]">Pedestrian Preferences</p>
+                <p className="text-xs font-semibold text-[#5B6B64]">
+                  {workoutMeta.fullLabel} Preferences
+                </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {PREFERENCE_OPTIONS.map((p) => {
                     const active = preferences.includes(p.id);
+                    const prefLabel = workoutMeta.preferenceLabels[p.id] || p.label;
                     return (
                       <button
                         key={p.id}
@@ -1239,7 +1421,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                             : 'border-[#D9D7CE] bg-white text-[#5B6B64]'
                         }`}
                       >
-                        {p.label}
+                        {prefLabel}
                       </button>
                     );
                   })}
@@ -1312,9 +1494,37 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
           </div>
 
           {error && (
-            <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{error}</span>
+            <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800 space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+              {error.toLowerCase().includes('outside') && (
+                <div className="flex flex-wrap gap-2 pl-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStartLoc(cityDefaultStart);
+                      setEndLoc(cityDefaultEnd);
+                      setClickedTarget(null);
+                      setMeasureResult(null);
+                      setError(null);
+                    }}
+                    className="rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-[#172D27] border border-red-200 hover:bg-[#F6F5F0]"
+                  >
+                    Reset to {activeCity.name} Center
+                  </button>
+                  {onOpenCitySettings && (
+                    <button
+                      type="button"
+                      onClick={onOpenCitySettings}
+                      className="rounded-lg bg-[#172D27] px-2.5 py-1 text-[11px] font-semibold text-[#9AE62E]"
+                    >
+                      Change Running City
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1422,7 +1632,12 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-semibold text-[#30483E]">
-                      {c.label} · {c.matchScore !== undefined ? `${c.matchScore}% match` : `${c.toleranceDiffPct}% delta`}
+                      {c.label} ·{' '}
+                      {c.matchScore !== undefined
+                        ? `${c.matchScore}% match`
+                        : c.turnCount !== undefined
+                        ? `${c.turnCount} turns · ${c.straightPathPct ?? 0}% straight`
+                        : `${c.toleranceDiffPct}% delta`}
                       {c.preferences.includes('well_lit') ? ' · Night Safe' : ''}
                     </span>
                     <span className="font-mono text-base font-bold text-[#172D27] tabular-nums">
@@ -1455,21 +1670,34 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
               selectedRouteId={selectedRoute?.id}
               startLocation={mode === 'run_art' && artAnyStartEnd ? undefined : startLoc}
               endLocation={mode === 'normal' && routeType === 'point_to_point' ? endLoc : undefined}
+              fallbackCenter={{ lat: activeCity.lat, lng: activeCity.lng }}
+              focusCenter={!selectedRoute && !clickedTarget ? { lat: startLoc.lat, lng: startLoc.lng } : undefined}
+              focusZoom={activeCity.zoom}
               pickMode={pickStartOnMap}
               onMapPick={(coords) => {
-                if (!isInsideChandigarh(coords)) {
-                  setError('Please tap inside Chandigarh UT boundaries (Mohali, Panchkula, Zirakpur & Kharar are excluded).');
+                if (!isInsideSelectedCity(coords, activeCity)) {
+                  setPickStartOnMap(false);
+                  setError(
+                    `That pin is outside ${activeCity.name}. Keep your starting pin inside ${activeCity.name} or change Running City in Profile.`
+                  );
                   return;
                 }
                 setError(null);
                 setStartLoc({
                   name: `Pinned Start (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`,
-                  city: 'Chandigarh',
+                  city: activeCity.name,
                   ...coords,
                 });
                 setPickStartOnMap(false);
               }}
               onMapClick={(coords) => {
+                if (!isInsideSelectedCity(coords, activeCity)) {
+                  setError(
+                    `Clicked point is outside ${activeCity.name}. Routes and measurements stay inside ${activeCity.name} unless you change Running City.`
+                  );
+                  return;
+                }
+                setError(null);
                 setClickedTarget(coords);
                 if (measureOriginMode === 'current' && !currentGpsLoc) {
                   requestCurrentGpsForMeasure();
@@ -1504,6 +1732,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
           {fullScreenMap && (
             <div className="mt-2.5 shrink-0">
               <MapPointDistanceCard
+                workoutType={workoutType}
                 originMode={measureOriginMode}
                 startLabel={startLoc.name}
                 onChangeOriginMode={(nextMode) => {
@@ -1526,19 +1755,23 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                         const activePrefs: RoutePreference[] = nightMode
                           ? Array.from(new Set([...preferences.filter((p) => p !== 'parks_greenery'), 'well_lit']))
                           : preferences;
-                        onStartRun(buildRouteCandidateFromPointPath(measureResult, activePrefs));
+                        onStartRun(
+                          buildRouteCandidateFromPointPath(measureResult, activePrefs, workoutType)
+                        );
                       }
                     : undefined
                 }
                 onSetTargetAsStart={(pt) => {
-                  if (!isInsideChandigarh(pt)) {
-                    setError('Please pick a Chandigarh UT location inside city limits for route generation.');
+                  if (!isInsideSelectedCity(pt, activeCity)) {
+                    setError(
+                      `That point is outside ${activeCity.name}. Change Running City in Profile to plan routes there.`
+                    );
                     return;
                   }
                   setError(null);
                   setStartLoc({
                     name: `Pinned Start (${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)})`,
-                    city: 'Chandigarh',
+                    city: activeCity.name,
                     ...pt,
                   });
                 }}
@@ -1555,6 +1788,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
 
         {!fullScreenMap && (
           <MapPointDistanceCard
+            workoutType={workoutType}
             originMode={measureOriginMode}
             startLabel={startLoc.name}
             onChangeOriginMode={(nextMode) => {
@@ -1576,19 +1810,23 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                     const activePrefs: RoutePreference[] = nightMode
                       ? Array.from(new Set([...preferences.filter((p) => p !== 'parks_greenery'), 'well_lit']))
                       : preferences;
-                    onStartRun(buildRouteCandidateFromPointPath(measureResult, activePrefs));
+                    onStartRun(
+                      buildRouteCandidateFromPointPath(measureResult, activePrefs, workoutType)
+                    );
                   }
                 : undefined
             }
             onSetTargetAsStart={(pt) => {
-              if (!isInsideChandigarh(pt)) {
-                setError('Please pick a Chandigarh UT location inside city limits for route generation.');
+              if (!isInsideSelectedCity(pt, activeCity)) {
+                setError(
+                  `That point is outside ${activeCity.name}. Change Running City in Profile to plan routes there.`
+                );
                 return;
               }
               setError(null);
               setStartLoc({
                 name: `Pinned Start (${pt.lat.toFixed(4)}, ${pt.lng.toFixed(4)})`,
-                city: 'Chandigarh',
+                city: activeCity.name,
                 ...pt,
               });
             }}
@@ -1620,7 +1858,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 className="flex min-h-[48px] shrink-0 items-center justify-center gap-2 rounded-xl bg-[#172D27] px-6 text-sm font-semibold text-[#9AE62E] shadow-sm transition hover:bg-[#30483E]"
               >
                 <Play className="h-4 w-4" />
-                Start Live Nav Run
+                Start Live Nav {getWorkoutMeta(selectedRoute.workoutType || workoutType).verb}
               </button>
             </div>
 
@@ -1635,9 +1873,20 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 </p>
               </div>
               <div>
-                <p className="text-xs text-[#5B6B64]">Est. Running Time</p>
+                <p className="text-xs text-[#5B6B64]">
+                  Est. {getWorkoutMeta(selectedRoute.workoutType || workoutType).label} Time
+                </p>
                 <p className="font-mono text-lg font-bold text-[#141F1B] tabular-nums">
                   {formatDuration(selectedRoute.durationSec)}
+                </p>
+                <p className="text-[11px] text-[#5B6B64]">
+                  ~
+                  {estimateCaloriesKcal(
+                    selectedRoute.workoutType || workoutType,
+                    selectedRoute.durationSec,
+                    selectedRoute.distanceMeters
+                  )}{' '}
+                  kcal
                 </p>
               </div>
               <div>
@@ -1653,10 +1902,20 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
                 </p>
               </div>
               <div>
-                <p className="text-xs text-[#5B6B64]">KM Splits</p>
-                <p className="font-mono text-lg font-bold text-[#141F1B] tabular-nums">
-                  {selectedRoute.kmMarkers.length} splits
+                <p className="text-xs text-[#5B6B64]">
+                  {selectedRoute.turnCount !== undefined ? 'Turns / Straight' : 'KM Splits'}
                 </p>
+                <p className="font-mono text-lg font-bold text-[#141F1B] tabular-nums">
+                  {selectedRoute.turnCount !== undefined
+                    ? `${selectedRoute.turnCount} turns`
+                    : `${selectedRoute.kmMarkers.length} splits`}
+                </p>
+                {selectedRoute.longestStraightMeters !== undefined && (
+                  <p className="text-[11px] text-[#5B6B64]">
+                    Max {formatDistance(selectedRoute.longestStraightMeters, preferredUnit)} ·{' '}
+                    {selectedRoute.straightPathPct ?? 0}% straight
+                  </p>
+                )}
               </div>
             </div>
 

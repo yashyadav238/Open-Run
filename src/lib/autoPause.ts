@@ -10,14 +10,15 @@ export interface SpeedSampleInput {
   stepMeters: number;
   dtSec: number;
   accuracyMeters: number;
+  maxValidSpeedMs?: number;
 }
 
 /**
- * Computes instantaneous running/walking speed in m/s from GPS Doppler speed and filtered displacement.
+ * Computes instantaneous running/cycling/walking speed in m/s from GPS Doppler speed and filtered displacement.
  * Snaps sub-threshold GPS drift cleanly to 0 so the instantaneous speed bar settles at 0.0 km/h when stopped.
  */
 export function computeInstantaneousSpeedMs(input: SpeedSampleInput): number {
-  const { reportedSpeedMs, stepMeters, dtSec, accuracyMeters } = input;
+  const { reportedSpeedMs, stepMeters, dtSec, accuracyMeters, maxValidSpeedMs = 11.5 } = input;
   const safeDt = Math.max(0.5, dtSec);
   const displacementSpeed = stepMeters / safeDt;
 
@@ -26,7 +27,7 @@ export function computeInstantaneousSpeedMs(input: SpeedSampleInput): number {
     Number.isFinite(reportedSpeedMs) &&
     reportedSpeedMs >= 0
   ) {
-    if (reportedSpeedMs > 10.5) return 0;
+    if (reportedSpeedMs > maxValidSpeedMs) return 0;
     if (reportedSpeedMs < ZERO_SPEED_THRESHOLD_MS && stepMeters < 3) {
       return 0;
     }
@@ -39,7 +40,7 @@ export function computeInstantaneousSpeedMs(input: SpeedSampleInput): number {
 
   if (accuracyMeters > 65) return 0;
   if (stepMeters < 2 && safeDt >= 1.2) return 0;
-  if (displacementSpeed > 10.5 || displacementSpeed < ZERO_SPEED_THRESHOLD_MS) {
+  if (displacementSpeed > maxValidSpeedMs || displacementSpeed < ZERO_SPEED_THRESHOLD_MS) {
     return 0;
   }
   return displacementSpeed;
@@ -99,7 +100,8 @@ export function evaluateAutoPauseTransition(input: AutoPauseEvalInput): AutoPaus
   return 'none';
 }
 
-export function speedBarPercent(speedKmh: number): number {
+export function speedBarPercent(speedKmh: number, maxSpeedBarKmh = 22): number {
   if (!Number.isFinite(speedKmh) || speedKmh <= 0) return 0;
-  return Math.min(100, Math.max(4, Math.round((speedKmh / 18) * 100)));
+  const maxRef = Math.max(8, maxSpeedBarKmh);
+  return Math.min(100, Math.max(4, Math.round((speedKmh / maxRef) * 100)));
 }

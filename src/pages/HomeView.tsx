@@ -1,21 +1,36 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowRight,
+  Calendar,
   Compass,
+  Globe2,
   LocateFixed,
+  Megaphone,
   Palette,
   Play,
+  Radio,
   Route as RouteIcon,
   Trophy,
   Type,
+  Users,
 } from 'lucide-react';
-import { isInsideChandigarh, TRICITY_START_PRESETS, VERIFIED_TRICITY_PLACES } from '../data/tricityPlaces';
-import { formatDistance, formatDuration, formatPace } from '../lib/geo';
+import { TRICITY_START_PRESETS, VERIFIED_TRICITY_PLACES } from '../data/tricityPlaces';
+import { isChandigarhCityName, type ActiveRunningCity } from '../data/worldCities';
+import {
+  estimateCaloriesKcal,
+  formatWorkoutPrimaryRate,
+  getWorkoutMeta,
+  normalizeWorkoutType,
+} from '../data/workouts';
+import { formatDistance, formatDuration } from '../lib/geo';
 import { CHALLENGES } from '../services/challengesService';
 import { recommendAlphabetKm, RUN_ART_TEMPLATES, sanitizeAlphabetInput } from '../services/runArtService';
+import { WorkoutIcon, WorkoutSelector } from '../components/WorkoutIcon';
 import type {
   AppTab,
+  LiveBeaconDoc,
   NamedLocation,
+  OpenRunInviteDoc,
   RouteMode,
   RouteType,
   RunActivityDoc,
@@ -24,19 +39,24 @@ import type {
   SavedRouteDoc,
   TricityPlace,
   UserProfileDoc,
+  WorkoutType,
 } from '../types/run';
-
-const DISTANCE_PRESETS = [1, 2, 3, 5, 7, 10];
 
 interface HomeViewProps {
   profile: UserProfileDoc | null;
+  activeCity: ActiveRunningCity;
+  selectedWorkout?: WorkoutType;
+  onSelectWorkout?: (workout: WorkoutType) => void;
   runs: RunActivityDoc[];
   savedRoutes: SavedRouteDoc[];
   artDesigns: RunArtDesignDoc[];
+  openInvites?: OpenRunInviteDoc[];
+  liveFriends?: LiveBeaconDoc[];
   isAuthenticated: boolean;
   onNavigate: (tab: AppTab) => void;
   onQuickGenerate: (params: {
     mode: RouteMode;
+    workoutType?: WorkoutType;
     distanceKm: number;
     routeType: RouteType;
     shapeType?: RunArtShapeType;
@@ -50,9 +70,14 @@ interface HomeViewProps {
 
 export const HomeView: React.FC<HomeViewProps> = ({
   profile,
+  activeCity,
+  selectedWorkout = 'running',
+  onSelectWorkout,
   runs,
   savedRoutes,
   artDesigns,
+  openInvites = [],
+  liveFriends = [],
   isAuthenticated,
   onNavigate,
   onQuickGenerate,
@@ -60,17 +85,62 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onExplorePlace,
   onOpenAuth,
 }) => {
+  const isChandigarh = isChandigarhCityName(activeCity.name);
+  const cityDefaultStart: NamedLocation = isChandigarh
+    ? TRICITY_START_PRESETS[0]
+    : {
+        name: `${activeCity.name} Center`,
+        city: activeCity.name,
+        lat: activeCity.lat,
+        lng: activeCity.lng,
+      };
+
+  const [workoutType, setWorkoutType] = useState<WorkoutType>(() =>
+    normalizeWorkoutType(selectedWorkout)
+  );
   const [mode, setMode] = useState<RouteMode>('normal');
-  const [distanceKm, setDistanceKm] = useState<number>(5);
+  const [distanceKm, setDistanceKm] = useState<number>(
+    () => getWorkoutMeta(selectedWorkout).defaultDistanceKm
+  );
   const [customInput, setCustomInput] = useState<string>('');
   const [showCustom, setShowCustom] = useState(false);
   const [routeType, setRouteType] = useState<RouteType>('circular');
   const [shapeType, setShapeType] = useState<RunArtShapeType>('heart');
   const [alphabetWord, setAlphabetWord] = useState<string>('RUN');
-  const [startLoc, setStartLoc] = useState<NamedLocation>(TRICITY_START_PRESETS[0]);
+  const [startLoc, setStartLoc] = useState<NamedLocation>(cityDefaultStart);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<string | null>(null);
   const [failedImgs, setFailedImgs] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setWorkoutType(normalizeWorkoutType(selectedWorkout));
+  }, [selectedWorkout]);
+
+  const workoutMeta = getWorkoutMeta(workoutType);
+
+  const handleWorkoutChange = (next: WorkoutType) => {
+    const norm = normalizeWorkoutType(next);
+    setWorkoutType(norm);
+    onSelectWorkout?.(norm);
+    if (mode === 'normal' && !showCustom) {
+      setDistanceKm(getWorkoutMeta(norm).defaultDistanceKm);
+    }
+  };
+
+  useEffect(() => {
+    setStartLoc((prev) =>
+      prev.name === 'Current GPS Location'
+        ? prev
+        : isChandigarhCityName(activeCity.name)
+        ? TRICITY_START_PRESETS[0]
+        : {
+            name: `${activeCity.name} Center`,
+            city: activeCity.name,
+            lat: activeCity.lat,
+            lng: activeCity.lng,
+          }
+    );
+  }, [activeCity.name, activeCity.lat, activeCity.lng]);
 
   const unit = profile?.preferredUnit || 'km';
 
@@ -88,22 +158,15 @@ export const HomeView: React.FC<HomeViewProps> = ({
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        if (!isInsideChandigarh(coords)) {
-          setLocError(
-            'Current GPS is outside Chandigarh UT. Pick a Chandigarh park preset below.'
-          );
-          setLocating(false);
-          return;
-        }
         setStartLoc({
           name: 'Current GPS Location',
-          city: 'Chandigarh',
+          city: activeCity.name,
           ...coords,
         });
         setLocating(false);
       },
       () => {
-        setLocError('Location access denied. Select a Chandigarh park or search in Plan Run.');
+        setLocError('Location access denied. Select a starting location or search any city in Plan Run.');
         setLocating(false);
       },
       { enableHighAccuracy: true, timeout: 8000 }
@@ -131,14 +194,28 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
         <div className="relative z-10 grid gap-6 p-5 sm:p-8 lg:grid-cols-12 lg:items-center">
           <div className="lg:col-span-6">
-            <p className="text-xs font-semibold tracking-wide text-[#B8E8C7]">
-              Chandigarh · Sukhna Lake · Leisure Valley · Sector Green Belts
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs font-semibold tracking-wide text-[#B8E8C7]">
+                {activeCity.name} · {activeCity.tagline || 'World Pedestrian Routes & Parks'}
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigate('profile')}
+                className="inline-flex items-center gap-1 rounded-lg bg-white/15 px-2.5 py-1 text-[11px] font-semibold text-[#9AE62E] hover:bg-white/25"
+              >
+                <Globe2 className="h-3 w-3" />
+                Change City
+              </button>
+            </div>
             <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-white sm:text-5xl text-balance">
-              READY TO RUN?
+              READY TO {workoutMeta.verb.toUpperCase()}?
             </h1>
             <p className="mt-2 max-w-lg text-sm leading-relaxed text-[#E2ECE6] sm:text-base">
-              Your City. Your Pace. Your Route. Generate connected Chandigarh pedestrian routes or snap Run Art shapes directly onto real footpaths.
+              Your City. Your Pace. Your Route. Generate connected{' '}
+              {workoutMeta.routingProfile === 'bicycle'
+                ? 'cycling & bikeway'
+                : 'pedestrian & trail'}{' '}
+              routes anywhere in the world or snap {workoutMeta.artNamePrefix} shapes onto real streets.
             </p>
 
             <div className="mt-6 flex flex-wrap gap-6 border-t border-white/15 pt-5">
@@ -149,7 +226,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 </p>
               </div>
               <div>
-                <p className="text-xs text-[#B8E8C7]/80">Logged Runs</p>
+                <p className="text-xs text-[#B8E8C7]/80">Logged Workouts</p>
                 <p className="font-mono text-2xl font-bold text-white tabular-nums">
                   {runs.length}
                 </p>
@@ -163,8 +240,12 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
           </div>
 
-          {/* Unified Quick Planner Card (Normal Run + Run Art) */}
+          {/* Unified Quick Planner Card (Sport Selector + Normal Route + GPS Art) */}
           <div className="rounded-2xl bg-white p-4 text-[#141F1B] shadow-lg sm:p-5 lg:col-span-6">
+            <div className="mb-3">
+              <WorkoutSelector value={workoutType} onChange={handleWorkoutChange} compact />
+            </div>
+
             <div className="grid grid-cols-2 gap-1.5 rounded-xl bg-[#F6F5F0] p-1">
               <button
                 type="button"
@@ -176,14 +257,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 }`}
               >
                 <RouteIcon className="h-3.5 w-3.5" />
-                Normal Run
+                Normal {workoutMeta.verb}
               </button>
               <button
                 type="button"
                 onClick={() => {
                   setMode('run_art');
-                  // Sector 17 is ideal default for crisp Run Art grids
-                  if (startLoc.name === TRICITY_START_PRESETS[0].name) {
+                  if (isChandigarh && startLoc.name === TRICITY_START_PRESETS[0].name) {
                     setStartLoc(TRICITY_START_PRESETS[1]);
                   }
                 }}
@@ -194,7 +274,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 }`}
               >
                 <Palette className="h-3.5 w-3.5" />
-                Run Art
+                {workoutMeta.artNamePrefix}
               </button>
             </div>
 
@@ -202,7 +282,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             <div className="mt-3.5">
               <p className="text-xs font-semibold text-[#5B6B64]">Distance (km)</p>
               <div className="mt-1.5 grid grid-cols-4 gap-1.5 sm:grid-cols-7">
-                {DISTANCE_PRESETS.map((km) => {
+                {workoutMeta.distancePresetsKm.map((km) => {
                   const active = !showCustom && distanceKm === km;
                   return (
                     <button
@@ -239,11 +319,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   <input
                     type="number"
                     min={0.5}
-                    max={60}
+                    max={workoutMeta.maxPlanKm}
                     step={0.5}
                     value={customInput}
                     onChange={(e) => setCustomInput(e.target.value)}
-                    placeholder="Enter km (e.g. 6.5)"
+                    placeholder={`Enter km (e.g. ${workoutMeta.defaultDistanceKm}, max ${workoutMeta.maxPlanKm})`}
                     className="min-h-[44px] w-full rounded-xl border border-[#D9D7CE] px-3 font-mono text-sm focus:border-[#172D27] focus:outline-none"
                   />
                 </div>
@@ -253,7 +333,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             {/* Start Location */}
             <div className="mt-3.5">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-[#5B6B64]">Chandigarh Start Point</p>
+                <p className="text-xs font-semibold text-[#5B6B64]">Start Point ({activeCity.name})</p>
                 <button
                   type="button"
                   onClick={handleUseCurrentLocation}
@@ -263,27 +343,40 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   {locating ? 'Locating...' : 'Use current GPS'}
                 </button>
               </div>
-              <select
-                value={
-                  TRICITY_START_PRESETS.some((p) => p.name === startLoc.name)
-                    ? startLoc.name
-                    : '__gps__'
-                }
-                onChange={(e) => {
-                  const found = TRICITY_START_PRESETS.find((p) => p.name === e.target.value);
-                  if (found) setStartLoc(found);
-                }}
-                className="mt-1.5 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 text-sm font-medium text-[#141F1B] focus:border-[#172D27] focus:outline-none"
-              >
-                {startLoc.name === 'Current GPS Location' && (
-                  <option value="__gps__">Current GPS Location</option>
-                )}
-                {TRICITY_START_PRESETS.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+              {isChandigarh ? (
+                <select
+                  value={
+                    TRICITY_START_PRESETS.some((p) => p.name === startLoc.name)
+                      ? startLoc.name
+                      : '__gps__'
+                  }
+                  onChange={(e) => {
+                    const found = TRICITY_START_PRESETS.find((p) => p.name === e.target.value);
+                    if (found) setStartLoc(found);
+                  }}
+                  className="mt-1.5 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 text-sm font-medium text-[#141F1B] focus:border-[#172D27] focus:outline-none"
+                >
+                  {startLoc.name === 'Current GPS Location' && (
+                    <option value="__gps__">Current GPS Location</option>
+                  )}
+                  {TRICITY_START_PRESETS.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="mt-1.5 flex items-center justify-between rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 py-2.5 text-sm font-medium text-[#141F1B]">
+                  <span className="truncate">{startLoc.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('plan')}
+                    className="ml-2 shrink-0 text-xs font-semibold text-[#30483E] hover:underline"
+                  >
+                    Search Map
+                  </button>
+                </div>
+              )}
               {locError && <p className="mt-1 text-xs text-red-700">{locError}</p>}
             </div>
 
@@ -389,7 +482,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 const safeWord = sanitizeAlphabetInput(alphabetWord) || 'RUN';
                 onQuickGenerate({
                   mode,
-                  distanceKm: Math.min(60, Math.max(0.5, effectiveKm || 5)),
+                  workoutType,
+                  distanceKm: Math.min(
+                    workoutMeta.maxPlanKm,
+                    Math.max(0.5, effectiveKm || workoutMeta.defaultDistanceKm)
+                  ),
                   routeType: mode === 'run_art' ? 'run_art' : routeType,
                   shapeType: mode === 'run_art' ? shapeType : undefined,
                   alphabetText: mode === 'run_art' && shapeType === 'alphabet' ? safeWord : undefined,
@@ -402,36 +499,72 @@ export const HomeView: React.FC<HomeViewProps> = ({
               {mode === 'run_art'
                 ? shapeType === 'alphabet'
                   ? `Generate "${sanitizeAlphabetInput(alphabetWord) || 'RUN'}" (${effectiveKm}K)`
-                  : `Generate ${RUN_ART_TEMPLATES.find((t) => t.id === shapeType)?.name || 'Run Art'} (${effectiveKm}K)`
-                : `Generate ${effectiveKm}K Route`}
+                  : `Generate ${RUN_ART_TEMPLATES.find((t) => t.id === shapeType)?.name || workoutMeta.artNamePrefix} (${effectiveKm}K)`
+                : `Generate ${effectiveKm}K ${workoutMeta.label} Route`}
             </button>
           </div>
         </div>
       </section>
 
+      {/* Live Friends Active Banner */}
+      {liveFriends.length > 0 && (
+        <section className="rounded-2xl border border-[#172D27]/25 bg-[#172D27] p-4 text-white shadow-sm sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#9AE62E] text-[#172D27]">
+                <Radio className="h-5 w-5 animate-pulse" />
+              </div>
+              <div>
+                <h2 className="font-display text-base font-bold text-white">
+                  {liveFriends.length} {liveFriends.length === 1 ? 'Friend' : 'Friends'} Active Live Now
+                </h2>
+                <p className="text-xs text-[#B8E8C7]">
+                  {liveFriends
+                    .slice(0, 3)
+                    .map(
+                      (b) =>
+                        `${b.displayName.split(' ')[0]} (${getWorkoutMeta(b.workoutType).label} · ${formatDistance(b.distanceMeters, unit)})`
+                    )
+                    .join(' · ')}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onNavigate('social')}
+              className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-[#9AE62E] px-4 text-xs font-bold text-[#172D27]"
+            >
+              Track Live on Map
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* Recent Activity & Saved Routes */}
       <div className="grid gap-6 lg:grid-cols-12">
         <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 lg:col-span-7">
           <div className="flex items-center justify-between">
-            <h2 className="font-display text-lg font-bold text-[#141F1B]">Recent Running Activity</h2>
+            <h2 className="font-display text-lg font-bold text-[#141F1B]">Recent Workout Activity</h2>
             <button
               type="button"
               onClick={() => onNavigate('history')}
               className="inline-flex items-center gap-1 text-xs font-semibold text-[#30483E] hover:underline"
             >
-              Run History <ArrowRight className="h-3.5 w-3.5" />
+              Workout History <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
 
           {runs.length === 0 ? (
             <div className="mt-4 rounded-xl bg-[#F6F5F0] p-5">
               <p className="text-sm font-semibold text-[#141F1B]">
-                {isAuthenticated ? 'No runs recorded yet' : 'Sign in to track your Chandigarh mileage'}
+                {isAuthenticated ? 'No workouts recorded yet' : 'Sign in to track your runs, rides & walks'}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-[#5B6B64]">
                 {isAuthenticated
-                  ? 'Generate a route above or start a live GPS run to see your splits, pace trends, and personal records.'
-                  : 'Browse routes freely or sign in with Google to save routes, log runs, and unlock challenges.'}
+                  ? 'Generate a route above or start a live GPS session to see your splits, speed/pace trends, calories, and personal records.'
+                  : 'Browse routes freely or sign in with Google to save routes, log workouts, and unlock challenges.'}
               </p>
               <div className="mt-3 flex gap-2">
                 <button
@@ -454,24 +587,43 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
           ) : (
             <div className="mt-3 divide-y divide-[#F0EFEA]">
-              {runs.slice(0, 4).map((run) => (
-                <div key={run.id} className="flex items-center justify-between py-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-[#141F1B]">{run.routeName}</p>
-                    <p className="mt-0.5 text-xs text-[#5B6B64]">
-                      {new Date(run.finishedAt).toLocaleDateString()} · {run.startName}
-                    </p>
+              {runs.slice(0, 4).map((run) => {
+                const runMeta = getWorkoutMeta(run.workoutType);
+                const kcal =
+                  typeof run.caloriesKcal === 'number' && run.caloriesKcal > 0
+                    ? run.caloriesKcal
+                    : estimateCaloriesKcal(run.workoutType, run.durationSec, run.distanceMeters);
+                const rateText = formatWorkoutPrimaryRate({
+                  workoutType: run.workoutType,
+                  avgPaceSecPerKm: run.avgPaceSecPerKm,
+                  avgSpeedKmh: run.avgSpeedKmh,
+                  unit,
+                });
+                return (
+                  <div key={run.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#EBF5EE] text-[#172D27]">
+                        <WorkoutIcon type={run.workoutType} className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-[#141F1B]">{run.routeName}</p>
+                        <p className="mt-0.5 text-xs text-[#5B6B64]">
+                          {runMeta.label} · {new Date(run.finishedAt).toLocaleDateString()} · {run.startName}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right tabular-nums">
+                      <p className="font-mono text-sm font-bold text-[#172D27]">
+                        {formatDistance(run.distanceMeters, unit)}
+                      </p>
+                      <p className="font-mono text-xs text-[#5B6B64]">
+                        {formatDuration(run.durationSec)} · {rateText}
+                        {kcal > 0 ? ` · ${kcal} kcal` : ''}
+                      </p>
+                    </div>
                   </div>
-                  <div className="text-right tabular-nums">
-                    <p className="font-mono text-sm font-bold text-[#172D27]">
-                      {formatDistance(run.distanceMeters, unit)}
-                    </p>
-                    <p className="font-mono text-xs text-[#5B6B64]">
-                      {formatDuration(run.durationSec)} · {formatPace(run.avgPaceSecPerKm, unit)}/{unit}
-                    </p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -492,31 +644,37 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
             {savedRoutes.length === 0 ? (
               <p className="mt-3 text-xs leading-relaxed text-[#5B6B64]">
-                Save any generated Normal Run or Run Art route in Plan Run to build your Chandigarh loop library.
+                Save any generated Normal or GPS Art route in Plan Run to build your route library.
               </p>
             ) : (
               <div className="mt-3 space-y-2">
-                {savedRoutes.slice(0, 3).map((sr) => (
-                  <div
-                    key={sr.id}
-                    className="flex items-center justify-between rounded-xl bg-[#F6F5F0] px-3 py-2.5"
-                  >
-                    <div className="min-w-0 pr-2">
-                      <p className="truncate text-sm font-semibold text-[#141F1B]">{sr.name}</p>
-                      <p className="font-mono text-xs text-[#5B6B64] tabular-nums">
-                        {formatDistance(sr.distanceMeters, unit)} · Chandigarh
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onStartSavedRoute(sr)}
-                      className="flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg bg-[#172D27] px-3 text-xs font-semibold text-[#9AE62E]"
+                {savedRoutes.slice(0, 3).map((sr) => {
+                  const srMeta = getWorkoutMeta(sr.workoutType);
+                  return (
+                    <div
+                      key={sr.id}
+                      className="flex items-center justify-between rounded-xl bg-[#F6F5F0] px-3 py-2.5"
                     >
-                      <Play className="h-3.5 w-3.5" />
-                      Run
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex min-w-0 items-center gap-2.5 pr-2">
+                        <WorkoutIcon type={sr.workoutType} className="h-4 w-4 shrink-0 text-[#30483E]" />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-[#141F1B]">{sr.name}</p>
+                          <p className="font-mono text-xs text-[#5B6B64] tabular-nums">
+                            {srMeta.label} · {formatDistance(sr.distanceMeters, unit)} · {sr.city || activeCity.name}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onStartSavedRoute(sr)}
+                        className="flex min-h-[38px] shrink-0 items-center gap-1 rounded-lg bg-[#172D27] px-3 text-xs font-semibold text-[#9AE62E]"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        {srMeta.verb}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -526,36 +684,40 @@ export const HomeView: React.FC<HomeViewProps> = ({
               <Palette className="h-4 w-4" />
               <span>Signature Feature</span>
             </div>
-            <h3 className="mt-2 font-display text-xl font-bold">RUN ART in Chandigarh</h3>
+            <h3 className="mt-2 font-display text-xl font-bold">
+              {workoutMeta.artNamePrefix.toUpperCase()} in {activeCity.name}
+            </h3>
             <p className="mt-1 text-xs leading-relaxed text-[#E2ECE6]">
-              Draw Hearts, Stars, Infinity loops, Diamonds, or Lightning bolts snapped strictly onto real Chandigarh footpaths.
+              Draw Hearts, Stars, Infinity loops, Diamonds, or Letters snapped onto real{' '}
+              {workoutMeta.routingProfile === 'bicycle' ? 'bikeable streets' : 'walkable streets'} anywhere.
             </p>
             <button
               type="button"
               onClick={() =>
                 onQuickGenerate({
                   mode: 'run_art',
-                  distanceKm: 5,
+                  workoutType,
+                  distanceKm: workoutMeta.defaultDistanceKm,
                   routeType: 'run_art',
                   shapeType: 'heart',
-                  start: TRICITY_START_PRESETS[1],
+                  start: isChandigarh ? TRICITY_START_PRESETS[1] : cityDefaultStart,
                 })
               }
               className="mt-4 inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-[#9AE62E] px-4 text-xs font-bold text-[#172D27]"
             >
-              Try Run Art Now
+              Try {workoutMeta.artNamePrefix} Now
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </section>
       </div>
 
-      {/* Popular Chandigarh Running Areas */}
+      {/* Featured Running Parks & Areas */}
       <section>
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="font-display text-xl font-bold text-[#141F1B]">Explore Chandigarh Running Areas</h2>
-            <p className="text-xs text-[#5B6B64]">Verified Chandigarh parks, Sukhna Lake paths, and sector green corridors</p>
+            <h2 className="font-display text-xl font-bold text-[#141F1B]">Explore Running Parks &amp; Areas</h2>
+            <p className="text-xs text-[#5B6B64]">Jump to curated parks or explore any destination on the world map</p>
           </div>
           <button
             type="button"
@@ -606,12 +768,113 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
       </section>
 
+      {/* Open Marathon & Fun Run Invites Snapshot */}
+      <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#172D27] text-[#9AE62E]">
+              <Megaphone className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#141F1B]">
+                Open Marathon &amp; Fun Run Invites
+              </h2>
+              <p className="text-xs text-[#5B6B64]">
+                Open group run requests broadcast to all runners — join or post your own
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('invites')}
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#172D27] px-4 text-xs font-bold text-[#9AE62E]"
+          >
+            {openInvites.length > 0 ? 'Browse & Send Invite' : 'Send Open Invite'}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        {openInvites.length === 0 ? (
+          <div className="mt-4 rounded-xl bg-[#F6F5F0] p-4 text-xs text-[#5B6B64]">
+            No active open invites yet. Broadcast a 5K Fun Run or Half Marathon request for other runners to join!
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {openInvites.slice(0, 3).map((evt) => {
+              const dt = new Date(evt.eventDateTime);
+              const when = Number.isNaN(dt.getTime())
+                ? evt.eventDateTime
+                : dt.toLocaleDateString('en-IN', {
+                    weekday: 'short',
+                    day: 'numeric',
+                    month: 'short',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  });
+              return (
+                <button
+                  key={evt.id}
+                  type="button"
+                  onClick={() => onNavigate('invites')}
+                  className="rounded-xl border border-[#E5E3DC] bg-[#F6F5F0] p-4 text-left transition hover:border-[#172D27]"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="rounded bg-[#172D27] px-2 py-0.5 text-[10px] font-bold uppercase text-[#9AE62E]">
+                      {evt.eventType === 'marathon' ? 'Marathon' : 'Fun Run'}
+                    </span>
+                    <span className="font-mono text-xs font-bold text-[#172D27] tabular-nums">
+                      {evt.distanceKm} km
+                    </span>
+                  </div>
+                  <h3 className="mt-2 truncate font-display text-sm font-bold text-[#141F1B]">
+                    {evt.title}
+                  </h3>
+                  <p className="mt-1 flex items-center gap-1.5 text-[11px] text-[#5B6B64]">
+                    <Calendar className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{when}</span>
+                  </p>
+                  <p className="mt-1 flex items-center justify-between text-[11px] font-semibold text-[#30483E]">
+                    <span className="truncate pr-2">{evt.meetingPoint}</span>
+                    <span className="inline-flex shrink-0 items-center gap-1 font-mono tabular-nums">
+                      <Users className="h-3 w-3" />
+                      {evt.rsvpCount}/{evt.maxParticipants}
+                    </span>
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Friends, Daily Runs & 24h Stories Shortcut */}
+      <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg font-bold text-[#141F1B]">
+              Friends, DMs, Daily Runs &amp; Stories
+            </h2>
+            <p className="text-xs text-[#5B6B64]">
+              Send friend requests, invite running buddies to custom distances in DMs, post daily runs, and share 24h stories
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('social')}
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#172D27] px-4 text-xs font-bold text-[#9AE62E]"
+          >
+            Open Social Hub
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </section>
+
       {/* Active Challenges Snapshot */}
       <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Trophy className="h-5 w-5 text-[#172D27]" />
-            <h2 className="font-display text-lg font-bold text-[#141F1B]">Chandigarh Challenges</h2>
+            <h2 className="font-display text-lg font-bold text-[#141F1B]">Multi-Sport Challenges</h2>
           </div>
           <button
             type="button"

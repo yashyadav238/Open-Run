@@ -6,11 +6,17 @@
       "type": "object",
       "properties": {
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "username": { "type": "string", "minLength": 3, "maxLength": 24, "pattern": "^[a-z0-9_]{3,24}$" },
         "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "photoURL": { "type": "string", "maxLength": 512 },
+        "photoURL": { "type": "string", "maxLength": 80000 },
         "preferredUnit": { "type": "string", "enum": ["km", "mi"] },
+        "preferredWorkout": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
         "preferredTerrain": { "type": "string", "maxLength": 40 },
-        "city": { "type": "string", "maxLength": 40 },
+        "city": { "type": "string", "maxLength": 80 },
+        "cityLat": { "type": "number" },
+        "cityLng": { "type": "number" },
+        "bio": { "type": "string", "maxLength": 280, "description": "Optional runner bio description" },
+        "bioTags": { "type": "array", "description": "Up to 8 optional runner bio tags" },
         "totalDistanceKm": { "type": "number" },
         "totalRuns": { "type": "number" },
         "totalDurationSec": { "type": "number" },
@@ -45,6 +51,7 @@
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
         "notes": { "type": "string", "maxLength": 500 },
         "city": { "type": "string", "maxLength": 50 },
+        "workoutType": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
         "routeType": { "type": "string", "enum": ["circular", "out_and_back", "point_to_point", "run_art"] },
         "distanceMeters": { "type": "number" },
         "durationSec": { "type": "number" },
@@ -70,13 +77,18 @@
         "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
         "routeId": { "type": "string", "maxLength": 128 },
         "routeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "workoutType": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
         "routeType": { "type": "string", "enum": ["circular", "out_and_back", "point_to_point", "run_art", "free_run"] },
         "distanceMeters": { "type": "number" },
         "durationSec": { "type": "number" },
         "avgPaceSecPerKm": { "type": "number" },
         "bestPaceSecPerKm": { "type": "number" },
         "avgSpeedKmh": { "type": "number" },
+        "caloriesKcal": { "type": "number" },
         "elevationGainMeters": { "type": "number" },
+        "elevationLossMeters": { "type": "number" },
+        "minElevationMeters": { "type": "number" },
+        "maxElevationMeters": { "type": "number" },
         "encodedPolyline": { "type": "string", "maxLength": 25000 },
         "startName": { "type": "string", "maxLength": 140 },
         "sampleCount": { "type": "number" },
@@ -138,6 +150,237 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "reporterName", "city", "areaName", "issueType", "description", "status", "createdAt"]
+    },
+    "OpenRunInvite": {
+      "title": "OpenRunInvite",
+      "description": "Open community invite for marathons and fun runs broadcast to all runners",
+      "type": "object",
+      "properties": {
+        "hostUserId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "hostName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "eventType": { "type": "string", "enum": ["marathon", "fun_run"] },
+        "workoutType": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
+        "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "distanceKm": { "type": "number" },
+        "eventDateTime": { "type": "string", "minLength": 10, "maxLength": 40 },
+        "meetingPoint": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 50 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "targetPace": { "type": "string", "maxLength": 60 },
+        "maxParticipants": { "type": "number" },
+        "rsvpCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["open", "cancelled", "completed"] },
+        "routeId": { "type": "string", "maxLength": 128 },
+        "routeName": { "type": "string", "maxLength": 120 },
+        "encodedPolyline": { "type": "string", "maxLength": 20000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "hostUserId",
+        "hostName",
+        "eventType",
+        "title",
+        "distanceKm",
+        "eventDateTime",
+        "meetingPoint",
+        "city",
+        "maxParticipants",
+        "rsvpCount",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OpenEventRsvp": {
+      "title": "OpenEventRsvp",
+      "description": "Runner RSVP record for an open marathon or fun run invite",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "runnerName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "paceNote": { "type": "string", "maxLength": 60 },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["eventId", "userId", "runnerName", "joinedAt"]
+    },
+    "RunnerDirectory": {
+      "title": "RunnerDirectory",
+      "description": "Public non-PII runner card for community discovery and friend requests",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "username": { "type": "string", "minLength": 3, "maxLength": 24, "pattern": "^[a-z0-9_]{3,24}$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 80000 },
+        "city": { "type": "string", "maxLength": 50 },
+        "bio": { "type": "string", "maxLength": 280, "description": "Optional runner bio description" },
+        "bioTags": { "type": "array", "description": "Up to 8 optional runner bio tags" },
+        "preferredWorkout": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
+        "totalDistanceKm": { "type": "number" },
+        "totalRuns": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "updatedAt"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Friend connection and request between two runners",
+      "type": "object",
+      "properties": {
+        "fromUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fromName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "fromPhotoUrl": { "type": "string", "maxLength": 80000 },
+        "toUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "toName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "toPhotoUrl": { "type": "string", "maxLength": 80000 },
+        "participantUids": { "type": "array", "description": "Exactly 2 UIDs" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "declined"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fromUid", "fromName", "toUid", "toName", "participantUids", "status", "createdAt", "updatedAt"]
+    },
+    "DmThread": {
+      "title": "DmThread",
+      "description": "Direct message thread between two accepted runner friends",
+      "type": "object",
+      "properties": {
+        "threadId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "participantUids": { "type": "array" },
+        "lastMessageText": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "lastMessageType": { "type": "string", "enum": ["text", "run_invite", "location"] },
+        "lastSenderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["threadId", "participantUids", "lastMessageText", "lastMessageType", "lastSenderId", "createdAt", "updatedAt"]
+    },
+    "DmMessage": {
+      "title": "DmMessage",
+      "description": "Direct message, personal run invite, or shared GPS location inside a DM thread",
+      "type": "object",
+      "properties": {
+        "threadId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "participantUids": { "type": "array" },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "messageType": { "type": "string", "enum": ["text", "run_invite", "location"] },
+        "workoutType": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "inviteDistanceKm": { "type": "number" },
+        "inviteTitle": { "type": "string", "maxLength": 120 },
+        "inviteDateTime": { "type": "string", "maxLength": 40 },
+        "inviteMeetingPoint": { "type": "string", "maxLength": 140 },
+        "inviteStatus": { "type": "string", "enum": ["pending", "accepted", "declined"] },
+        "inviteRouteName": { "type": "string", "maxLength": 120 },
+        "inviteEncodedPolyline": { "type": "string", "maxLength": 20000 },
+        "locationLat": { "type": "number" },
+        "locationLng": { "type": "number" },
+        "locationLabel": { "type": "string", "maxLength": 140 },
+        "locationIsLive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["threadId", "participantUids", "senderUid", "senderName", "messageType", "text", "createdAt", "updatedAt"]
+    },
+    "DailyRunPost": {
+      "title": "DailyRunPost",
+      "description": "Community feed post sharing a daily run",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhotoUrl": { "type": "string", "maxLength": 80000 },
+        "workoutType": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
+        "caption": { "type": "string", "minLength": 1, "maxLength": 400 },
+        "runTitle": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "distanceKm": { "type": "number" },
+        "durationSec": { "type": "number" },
+        "avgPaceSecPerKm": { "type": "number" },
+        "elevationGainMeters": { "type": "number" },
+        "startName": { "type": "string", "maxLength": 140 },
+        "encodedPolyline": { "type": "string", "maxLength": 25000 },
+        "moodTag": { "type": "string", "maxLength": 30 },
+        "likeCount": { "type": "number" },
+        "visibility": { "type": "string", "enum": ["public"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "authorName", "caption", "runTitle", "distanceKm", "durationSec", "avgPaceSecPerKm", "startName", "likeCount", "visibility", "createdAt", "updatedAt"]
+    },
+    "DailyPostLike": {
+      "title": "DailyPostLike",
+      "description": "Kudos/like record on a daily run post",
+      "type": "object",
+      "properties": {
+        "postId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "runnerName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["postId", "userId", "runnerName", "createdAt"]
+    },
+    "RunStory": {
+      "title": "RunStory",
+      "description": "24-hour runner story highlight",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "authorPhotoUrl": { "type": "string", "maxLength": 80000 },
+        "workoutType": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
+        "headline": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "caption": { "type": "string", "maxLength": 220 },
+        "distanceKm": { "type": "number" },
+        "durationSec": { "type": "number" },
+        "paceLabel": { "type": "string", "maxLength": 30 },
+        "themeColor": { "type": "string", "enum": ["pine", "lime", "sunset", "slate"] },
+        "encodedPolyline": { "type": "string", "maxLength": 25000 },
+        "expiresAtMs": { "type": "number" },
+        "visibility": { "type": "string", "enum": ["public"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "authorName", "headline", "distanceKm", "durationSec", "themeColor", "expiresAtMs", "visibility", "createdAt"]
+    },
+    "LiveBeacon": {
+      "title": "LiveBeacon",
+      "description": "Real-time live run GPS location beacon shared with friends or selected individuals",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "photoURL": { "type": "string", "maxLength": 80000 },
+        "workoutType": { "type": "string", "enum": ["running", "cycling", "walking", "hiking", "trail_run"] },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "heading": { "type": "number" },
+        "distanceMeters": { "type": "number" },
+        "elapsedSec": { "type": "number" },
+        "currentSpeedKmh": { "type": "number" },
+        "routeName": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["active", "paused", "ended"] },
+        "shareScope": { "type": "string", "enum": ["friends", "selected"] },
+        "allowedUids": { "type": "array" },
+        "expiresAtMs": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "lat", "lng", "distanceMeters", "elapsedSec", "currentSpeedKmh", "routeName", "status", "shareScope", "allowedUids", "expiresAtMs", "updatedAt"]
+    },
+    "UsernameClaim": {
+      "title": "UsernameClaim",
+      "description": "Unique lowercase runner handle reservation mapping username to uid",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "minLength": 3, "maxLength": 24, "pattern": "^[a-z0-9_]{3,24}$" },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "uid", "displayName", "createdAt"]
     }
   },
   "firestore": {
@@ -147,6 +390,17 @@
     "/runs/{runId}": { "schema": "RunActivity", "description": "Completed runs" },
     "/run_art_designs/{designId}": { "schema": "RunArtDesign", "description": "GPS Run Art designs" },
     "/challenges/{challengeId}": { "schema": "ChallengeProgress", "description": "User challenge progress" },
-    "/path_reports/{reportId}": { "schema": "PathReport", "description": "Community path reports" }
+    "/path_reports/{reportId}": { "schema": "PathReport", "description": "Community path reports" },
+    "/open_events/{eventId}": { "schema": "OpenRunInvite", "description": "Open marathon and fun run invites" },
+    "/open_events/{eventId}/rsvps/{rsvpUserId}": { "schema": "OpenEventRsvp", "description": "Open event runner RSVPs" },
+    "/runner_directory/{userId}": { "schema": "RunnerDirectory", "description": "Public non-PII runner directory cards" },
+    "/usernames/{username}": { "schema": "UsernameClaim", "description": "Unique runner handle registry" },
+    "/friend_requests/{requestId}": { "schema": "FriendRequest", "description": "Friend requests and friendships" },
+    "/dm_threads/{threadId}": { "schema": "DmThread", "description": "1-to-1 DM threads between friends" },
+    "/dm_threads/{threadId}/messages/{messageId}": { "schema": "DmMessage", "description": "DM messages, personal run invites, and shared locations" },
+    "/daily_posts/{postId}": { "schema": "DailyRunPost", "description": "Daily run feed posts" },
+    "/daily_posts/{postId}/likes/{likerUid}": { "schema": "DailyPostLike", "description": "Likes on daily run posts" },
+    "/run_stories/{storyId}": { "schema": "RunStory", "description": "24-hour runner stories" },
+    "/live_beacons/{userId}": { "schema": "LiveBeacon", "description": "Real-time live run location beacons" }
   }
 }

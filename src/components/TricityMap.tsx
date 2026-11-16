@@ -6,9 +6,16 @@ import {
 } from '@vis.gl/react-google-maps';
 import { Crosshair, Flag } from 'lucide-react';
 import { TRICITY_CENTER, VERIFIED_TRICITY_PLACES } from '../data/tricityPlaces';
-import { formatPace } from '../lib/geo';
+import { getWorkoutMeta } from '../data/workouts';
+import { formatDistance, formatPace } from '../lib/geo';
 import { GOOGLE_MAPS_ATTRIBUTION_IDS, GOOGLE_MAPS_MAP_ID } from '../lib/mapsConfig';
-import type { CompletedKmCheckpoint, GeneratedRouteCandidate, LatLngLiteral, TricityPlace } from '../types/run';
+import type {
+  CompletedKmCheckpoint,
+  GeneratedRouteCandidate,
+  LatLngLiteral,
+  LiveBeaconDoc,
+  TricityPlace,
+} from '../types/run';
 
 interface TricityMapProps {
   routes?: GeneratedRouteCandidate[];
@@ -20,6 +27,7 @@ interface TricityMapProps {
   completedKmMarkers?: CompletedKmCheckpoint[];
   preferredUnit?: 'km' | 'mi';
   userPosition?: LatLngLiteral | null;
+  liveFriends?: LiveBeaconDoc[];
   showVerifiedParks?: boolean;
   onSelectPark?: (park: TricityPlace) => void;
   onMapPick?: (coords: LatLngLiteral) => void;
@@ -29,6 +37,7 @@ interface TricityMapProps {
   measureTarget?: LatLngLiteral | null;
   measurePath?: LatLngLiteral[];
   heightClass?: string;
+  fallbackCenter?: LatLngLiteral;
   focusCenter?: LatLngLiteral;
   focusZoom?: number;
   // Navigation-mode camera props
@@ -49,6 +58,7 @@ function RouteOverlays({
   liveTrace,
   measurePath,
   userPosition,
+  fallbackCenter,
   focusCenter,
   focusZoom,
   navigationMode,
@@ -65,6 +75,7 @@ function RouteOverlays({
   liveTrace?: LatLngLiteral[];
   measurePath?: LatLngLiteral[];
   userPosition?: LatLngLiteral | null;
+  fallbackCenter?: LatLngLiteral;
   focusCenter?: LatLngLiteral;
   focusZoom?: number;
   navigationMode?: boolean;
@@ -300,8 +311,8 @@ function RouteOverlays({
       map.fitBounds(bounds, 48);
       return;
     }
-    map.panTo(TRICITY_CENTER);
-    map.setZoom(13);
+    map.panTo(focusCenter || fallbackCenter || TRICITY_CENTER);
+    map.setZoom(focusZoom || 13);
   };
 
   if (hideRecenterButton) return null;
@@ -328,6 +339,7 @@ export const TricityMap: React.FC<TricityMapProps> = ({
   completedKmMarkers,
   preferredUnit = 'km',
   userPosition,
+  liveFriends = [],
   showVerifiedParks = false,
   onSelectPark,
   onMapPick,
@@ -337,6 +349,7 @@ export const TricityMap: React.FC<TricityMapProps> = ({
   measureTarget,
   measurePath,
   heightClass = 'h-[360px] lg:h-[520px]',
+  fallbackCenter,
   focusCenter,
   focusZoom,
   navigationMode = false,
@@ -377,7 +390,7 @@ export const TricityMap: React.FC<TricityMapProps> = ({
     >
       <GoogleMap
         mapId={GOOGLE_MAPS_MAP_ID}
-        defaultCenter={navCenter || focusCenter || activeStart || TRICITY_CENTER}
+        defaultCenter={navCenter || focusCenter || activeStart || fallbackCenter || TRICITY_CENTER}
         defaultZoom={navigationMode ? navZoom : focusZoom || 13}
         defaultTilt={navigationMode ? navTilt : 0}
         defaultHeading={navigationMode ? navHeading : 0}
@@ -413,6 +426,7 @@ export const TricityMap: React.FC<TricityMapProps> = ({
           liveTrace={liveTrace}
           measurePath={measurePath}
           userPosition={userPosition}
+          fallbackCenter={fallbackCenter}
           focusCenter={focusCenter}
           focusZoom={focusZoom}
           navigationMode={navigationMode}
@@ -549,11 +563,45 @@ export const TricityMap: React.FC<TricityMapProps> = ({
             </AdvancedMarker>
           )
         )}
+
+        {liveFriends.map((friend) => {
+          const friendSport = getWorkoutMeta(friend.workoutType);
+          return (
+          <AdvancedMarker
+            key={`live-friend-${friend.uid}`}
+            position={{ lat: friend.lat, lng: friend.lng }}
+            title={`${friend.displayName} (${friendSport.fullLabel}) · ${formatDistance(friend.distanceMeters, preferredUnit)}`}
+          >
+            <div className="flex flex-col items-center">
+              <div className="mb-1 whitespace-nowrap rounded-lg border border-[#9AE62E]/70 bg-[#172D27] px-2 py-0.5 text-[10px] font-bold text-white shadow-lg">
+                <span>{friend.displayName.split(' ')[0]}</span>
+                <span className="mx-1 text-[#B8E8C7]/80">· {friendSport.label}</span>
+                <span className="font-mono text-[#9AE62E] tabular-nums">
+                  {formatDistance(friend.distanceMeters, preferredUnit)}
+                </span>
+              </div>
+              <div className="relative flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-[#10B981] font-display text-[11px] font-extrabold text-white shadow-lg">
+                <span className="absolute -inset-1 animate-ping rounded-full bg-[#10B981]/45" />
+                {friend.photoURL ? (
+                  <img
+                    src={friend.photoURL}
+                    alt={friend.displayName}
+                    referrerPolicy="no-referrer"
+                    className="relative h-full w-full rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="relative">{friend.displayName.charAt(0).toUpperCase()}</span>
+                )}
+              </div>
+            </div>
+          </AdvancedMarker>
+          );
+        })}
       </GoogleMap>
 
       {pickMode && (
         <div className="pointer-events-none absolute top-3 left-3 z-10 rounded-xl bg-[#172D27]/90 px-3 py-2 text-xs font-medium text-white shadow">
-          Tap anywhere in Chandigarh to set your starting pin
+          Tap anywhere on the map to set your starting pin
         </div>
       )}
     </div>

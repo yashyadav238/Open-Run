@@ -241,8 +241,8 @@ export const RunVideoModal: React.FC<RunVideoModalProps> = ({
     const video = await ensureVideoRecorded();
     if (!video) return;
 
-    const shareTitle = `TRICITY RUN: ${payload.title}`;
-    const shareText = `Watch my ${payload.title} run journey in Chandigarh — TRICITY RUN.`;
+    const shareTitle = `OPEN RUN: ${payload.title}`;
+    const shareText = `Watch my ${payload.title} run journey — OPEN RUN.`;
     const nav = typeof navigator !== 'undefined' ? navigator : undefined;
 
     if (nav && typeof nav.share === 'function') {

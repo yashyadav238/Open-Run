@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
-import { Award, Check, CloudOff, Download, Film, Home, Loader2, RefreshCw, Share2, Trash2 } from 'lucide-react';
+import { Award, Check, CloudOff, Download, Film, Home, Loader2, Plus, RefreshCw, Share2, Sparkles, Trash2 } from 'lucide-react';
+import {
+  estimateCaloriesKcal,
+  formatSpeed,
+  formatWorkoutPrimaryRate,
+  getWorkoutMeta,
+  normalizeWorkoutType,
+} from '../data/workouts';
 import {
   buildCompletedKmCheckpoints,
   computeKmMarkers,
   decodePolyline,
   formatDistance,
   formatDuration,
+  formatElevationGain,
   formatPace,
 } from '../lib/geo';
 import { buildVideoPayloadFromSummary } from '../services/runVideoService';
@@ -18,15 +26,26 @@ import {
   type PreparedShareCard,
   type ShareCardStyle,
 } from '../services/shareCardService';
-import type { GeneratedRouteCandidate, RunActivityDoc } from '../types/run';
+import type {
+  ElevationProfilePoint,
+  GeneratedRouteCandidate,
+  RunActivityDoc,
+} from '../types/run';
+import {
+  ElevationProfileCard,
+  type ElevationFetchStatus,
+} from './ElevationProfileCard';
 import { RunVideoModal } from './RunVideoModal';
 import { ShareCardModal } from './ShareCardModal';
 import { TricityMap } from './TricityMap';
+import { WorkoutIcon } from './WorkoutIcon';
 
 export type AutoSaveStatus = 'saving' | 'saved' | 'local_only' | 'error';
 
 interface RunSummaryModalProps {
   summary: Omit<RunActivityDoc, 'id' | 'userId' | 'createdAt'>;
+  elevationStatus?: ElevationFetchStatus;
+  elevationProfile?: ElevationProfilePoint[];
   previousRuns: RunActivityDoc[];
   preferredUnit: 'km' | 'mi';
   isAuthenticated: boolean;
@@ -34,12 +53,16 @@ interface RunSummaryModalProps {
   saveError?: string | null;
   onRetrySync: () => Promise<void>;
   onDiscardRun: () => Promise<void>;
+  onPostDailyRun?: () => void;
+  onAddStory?: () => void;
   onOpenAuth: () => void;
   onCloseHome: () => void;
 }
 
 export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
   summary,
+  elevationStatus = 'ready',
+  elevationProfile,
   previousRuns,
   preferredUnit,
   isAuthenticated,
@@ -47,6 +70,8 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
   saveError,
   onRetrySync,
   onDiscardRun,
+  onPostDailyRun,
+  onAddStory,
   onOpenAuth,
   onCloseHome,
 }) => {
@@ -58,8 +83,19 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const prevBestDist = previousRuns.reduce((m, r) => Math.max(m, r.distanceMeters), 0);
-  const isLongestPR = previousRuns.length > 0 && summary.distanceMeters > prevBestDist;
+  const workoutType = normalizeWorkoutType(summary.workoutType);
+  const workoutMeta = getWorkoutMeta(workoutType);
+  const isSpeedPrimary = workoutMeta.primaryMetric === 'speed';
+  const caloriesKcal =
+    typeof summary.caloriesKcal === 'number' && summary.caloriesKcal > 0
+      ? summary.caloriesKcal
+      : estimateCaloriesKcal(workoutType, summary.durationSec, summary.distanceMeters);
+
+  const sameSportRuns = previousRuns.filter(
+    (r) => normalizeWorkoutType(r.workoutType) === workoutType
+  );
+  const prevBestDist = sameSportRuns.reduce((m, r) => Math.max(m, r.distanceMeters), 0);
+  const isLongestPR = sameSportRuns.length > 0 && summary.distanceMeters > prevBestDist;
 
   const decodedPath = summary.encodedPolyline ? decodePolyline(summary.encodedPolyline) : [];
   const completedKmMarkers = buildCompletedKmCheckpoints(decodedPath, summary.splits);
@@ -70,6 +106,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
           id: 'summary-preview',
           label: 'Best Match',
           name: summary.routeName,
+          workoutType,
           routeType: summary.routeType === 'free_run' ? 'circular' : summary.routeType,
           distanceMeters: summary.distanceMeters,
           targetDistanceMeters: summary.distanceMeters,
@@ -99,7 +136,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
     try {
       await onRetrySync();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to sync run.');
+      setError(err instanceof Error ? err.message : 'Unable to sync workout.');
     } finally {
       setRetrying(false);
     }
@@ -111,41 +148,52 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
     try {
       await onDiscardRun();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to remove run.');
+      setError(err instanceof Error ? err.message : 'Unable to remove workout.');
       setDeleting(false);
     }
   };
 
   const buildCardPayload = (style: ShareCardStyle = 'route') => ({
     style,
-    title: summary.routeName || 'Chandigarh Run',
-    subtitle: 'TRICITY RUN  ·  CHANDIGARH ACTIVITY',
+    workoutType,
+    title: summary.routeName || workoutMeta.fullLabel,
+    subtitle: `OPEN RUN  ·  ${workoutMeta.fullLabel.toUpperCase()}`,
     path: decodedPath,
     primaryStatValue: formatDistance(summary.distanceMeters, preferredUnit),
-    secondaryLine: `TIME ${formatDuration(summary.durationSec)}   ·   PACE ${formatPace(summary.avgPaceSecPerKm, preferredUnit)}/${preferredUnit}`,
-    footerText: `${formatRunDateSafe(summary.finishedAt)} · ${summary.startName || 'Chandigarh'}`,
+    secondaryLine: isSpeedPrimary
+      ? `TIME ${formatDuration(summary.durationSec)}   ·   SPEED ${formatSpeed(summary.avgSpeedKmh, preferredUnit)}`
+      : `TIME ${formatDuration(summary.durationSec)}   ·   PACE ${formatPace(summary.avgPaceSecPerKm, preferredUnit)}/${preferredUnit}`,
+    footerText: `${formatRunDateSafe(summary.finishedAt)} · ${summary.startName || 'GPS Track'}`,
     unit: preferredUnit,
     distanceMeters: summary.distanceMeters,
     durationSec: summary.durationSec,
     avgPaceSecPerKm: summary.avgPaceSecPerKm,
     avgSpeedKmh: summary.avgSpeedKmh,
+    caloriesKcal,
+    elevationGainMeters: summary.elevationGainMeters ?? null,
     splits: summary.splits,
   });
 
   const handleDownloadCard = () => {
     const rendered = renderRunShareCardSync(buildCardPayload('route'));
     if (!rendered) return;
-    triggerPngDownload(rendered.dataUrl, `tricity-run-${Date.now()}.png`);
+    triggerPngDownload(rendered.dataUrl, `open-run-${workoutType}-${Date.now()}.png`);
     setShareNotice('Activity PNG saved to your device.');
   };
 
   const openShareStudio = (initialStyle: ShareCardStyle = 'route') => {
     setShareNotice(null);
-    const routeTitle = summary.routeName || 'Chandigarh Run';
-    const shareText = `Ran ${formatDistance(summary.distanceMeters, preferredUnit)} in ${formatDuration(summary.durationSec)} (${formatPace(summary.avgPaceSecPerKm, preferredUnit)}/${preferredUnit}) on ${routeTitle} — TRICITY RUN Chandigarh.`;
+    const routeTitle = summary.routeName || workoutMeta.fullLabel;
+    const rateLabel = formatWorkoutPrimaryRate({
+      workoutType,
+      avgPaceSecPerKm: summary.avgPaceSecPerKm,
+      avgSpeedKmh: summary.avgSpeedKmh,
+      unit: preferredUnit,
+    });
+    const shareText = `Completed a ${formatDistance(summary.distanceMeters, preferredUnit)} ${workoutMeta.pastNoun.toLowerCase()} in ${formatDuration(summary.durationSec)} (${rateLabel}, ${caloriesKcal} kcal burnt) on ${routeTitle} — OPEN RUN.`;
     const prepared = prepareShareCardSync({
-      filename: `tricity-run-${Date.now()}.png`,
-      shareTitle: `TRICITY RUN: ${routeTitle}`,
+      filename: `open-run-${workoutType}-${Date.now()}.png`,
+      shareTitle: `OPEN RUN: ${routeTitle}`,
       shareText,
       card: buildCardPayload(initialStyle),
     });
@@ -160,19 +208,22 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
     <div className="fixed inset-0 z-50 overflow-y-auto bg-[#F6F5F0] p-4 sm:p-6">
       <div className="mx-auto max-w-3xl space-y-5">
         <div className="rounded-2xl bg-[#172D27] p-6 text-white">
-          <p className="text-xs font-medium text-[#B8E8C7]">
-            {formatRunDateSafe(summary.finishedAt)} · {summary.startName}
-          </p>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-[#B8E8C7]">
+            <WorkoutIcon type={workoutType} className="h-3.5 w-3.5 text-[#9AE62E]" />
+            <span className="font-semibold text-[#9AE62E]">{workoutMeta.fullLabel}</span>
+            <span aria-hidden="true">·</span>
+            <span>{formatRunDateSafe(summary.finishedAt)} · {summary.startName}</span>
+          </div>
           <h2 className="mt-1 font-display text-2xl font-bold">{summary.routeName}</h2>
 
           {isLongestPR && (
             <div className="mt-3 inline-flex items-center gap-2 rounded-lg bg-[#30483E] px-3 py-1.5 text-xs font-semibold text-[#9AE62E]">
               <Award className="h-4 w-4" />
-              New Personal Record — Longest Logged Run
+              New Personal Record — Longest Logged {workoutMeta.pastNoun}
             </div>
           )}
 
-          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
             <div>
               <p className="text-xs text-[#B8E8C7]/80">Distance</p>
               <p className="mt-0.5 font-mono text-2xl font-bold tabular-nums">
@@ -185,25 +236,80 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
                 {formatDuration(summary.durationSec)}
               </p>
             </div>
+            {isSpeedPrimary ? (
+              <>
+                <div>
+                  <p className="text-xs text-[#B8E8C7]/80">Avg Speed</p>
+                  <p className="mt-0.5 font-mono text-2xl font-bold text-[#9AE62E] tabular-nums">
+                    {formatSpeed(summary.avgSpeedKmh, preferredUnit)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-[#B8E8C7]/80">Average Pace</p>
+                  <p className="mt-0.5 font-mono text-2xl font-bold tabular-nums">
+                    {formatPace(summary.avgPaceSecPerKm, preferredUnit)}
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <p className="text-xs text-[#B8E8C7]/80">Average Pace</p>
+                  <p className="mt-0.5 font-mono text-2xl font-bold text-[#9AE62E] tabular-nums">
+                    {formatPace(summary.avgPaceSecPerKm, preferredUnit)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-[#B8E8C7]/80">Avg Speed</p>
+                  <p className="mt-0.5 font-mono text-2xl font-bold tabular-nums">
+                    {formatSpeed(summary.avgSpeedKmh, preferredUnit)}
+                  </p>
+                </div>
+              </>
+            )}
             <div>
-              <p className="text-xs text-[#B8E8C7]/80">Average Pace</p>
-              <p className="mt-0.5 font-mono text-2xl font-bold tabular-nums">
-                {formatPace(summary.avgPaceSecPerKm, preferredUnit)}
+              <p className="text-xs text-[#B8E8C7]/80">Elev Gain</p>
+              <p className="mt-0.5 font-mono text-2xl font-bold text-[#9AE62E] tabular-nums">
+                {elevationStatus === 'loading'
+                  ? '...'
+                  : formatElevationGain(summary.elevationGainMeters, preferredUnit)}
               </p>
             </div>
             <div>
-              <p className="text-xs text-[#B8E8C7]/80">Avg Speed</p>
+              <p className="text-xs text-[#B8E8C7]/80">Calories</p>
               <p className="mt-0.5 font-mono text-2xl font-bold tabular-nums">
-                {summary.avgSpeedKmh.toFixed(1)} km/h
+                {caloriesKcal} <span className="text-xs font-semibold text-[#B8E8C7]">kcal</span>
               </p>
             </div>
           </div>
         </div>
 
+        <ElevationProfileCard
+          workoutLabel={workoutMeta.fullLabel}
+          routeName={summary.routeName || workoutMeta.fullLabel}
+          startName={summary.startName}
+          distanceMeters={summary.distanceMeters}
+          durationSec={summary.durationSec}
+          rateText={formatWorkoutPrimaryRate({
+            workoutType,
+            avgPaceSecPerKm: summary.avgPaceSecPerKm,
+            avgSpeedKmh: summary.avgSpeedKmh,
+            unit: preferredUnit,
+          })}
+          caloriesKcal={caloriesKcal}
+          elevationGainMeters={summary.elevationGainMeters}
+          elevationLossMeters={summary.elevationLossMeters}
+          minElevationMeters={summary.minElevationMeters}
+          maxElevationMeters={summary.maxElevationMeters}
+          profile={elevationProfile}
+          status={elevationStatus}
+          unit={preferredUnit}
+        />
+
         {previewRoute && (
           <div className="space-y-2">
             <div className="flex items-center justify-between px-1 text-xs font-semibold text-[#5B6B64]">
-              <span>Recorded Run Snapshot (Start · KM Splits · Finish)</span>
+              <span>Recorded {workoutMeta.pastNoun} Snapshot (Start · KM Splits · Finish)</span>
               <span className="font-mono">{summary.sampleCount > 1 ? `${summary.sampleCount} GPS pts` : 'Route Trace'}</span>
             </div>
             <TricityMap
@@ -280,7 +386,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
 
         {(error || saveError) && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            {error || saveError} — Your run stays safely saved on this device until synced.
+            {error || saveError} — Your workout stays safely saved on this device until synced.
           </div>
         )}
 
@@ -302,9 +408,9 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
             )}
             <span>
               {saveStatus === 'saved'
-                ? 'Automatically saved to your Run History'
+                ? 'Automatically saved to your Workout History'
                 : saveStatus === 'saving'
-                ? 'Auto-saving run to your history...'
+                ? 'Auto-saving workout to your history...'
                 : saveStatus === 'local_only'
                 ? isAuthenticated
                   ? 'Saved on this device — verify email to sync to cloud'
@@ -339,7 +445,7 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
             className="flex min-h-[48px] flex-[1.3] items-center justify-center gap-2 rounded-xl bg-[#172D27] px-5 text-sm font-semibold text-[#9AE62E]"
           >
             <Home className="h-4 w-4" />
-            Done · View Run History
+            Done · View Workout History
           </button>
 
           <button
@@ -359,6 +465,28 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
             <Share2 className="h-4 w-4" />
             Share PNG Types
           </button>
+
+          {onPostDailyRun && (
+            <button
+              type="button"
+              onClick={onPostDailyRun}
+              className="flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl border border-[#172D27]/30 bg-[#EBF5EE] px-4 text-sm font-semibold text-[#172D27]"
+            >
+              <Sparkles className="h-4 w-4" />
+              Post Activity
+            </button>
+          )}
+
+          {onAddStory && (
+            <button
+              type="button"
+              onClick={onAddStory}
+              className="flex min-h-[48px] items-center justify-center gap-1.5 rounded-xl border border-[#D9D7CE] bg-white px-4 text-sm font-semibold text-[#141F1B]"
+            >
+              <Plus className="h-4 w-4" />
+              Add Story
+            </button>
+          )}
 
           {confirmDelete ? (
             <button
