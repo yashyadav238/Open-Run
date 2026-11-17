@@ -14,6 +14,8 @@ import {
   haversineMeters,
 } from './src/lib/geo';
 
+import { registerMusicRoutes } from './server/musicRoutes';
+
 dotenv.config();
 
 const PORT = 3000;
@@ -25,6 +27,8 @@ async function startServer() {
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'open-run' });
   });
+
+  registerMusicRoutes(app);
 
   app.get('/api/maps-config', (_req, res) => {
     const apiKey =

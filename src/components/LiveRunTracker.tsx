@@ -182,7 +182,9 @@ export const LiveRunTracker: React.FC<LiveRunTrackerProps> = ({
   const [kmMilestoneToast, setKmMilestoneToast] = useState<{
     km: number;
     splitDurationSec: number;
+    totalDurationSec: number;
     paceSecPerKm: number;
+    avgPaceSecPerKm: number;
     caloriesKcal: number;
     totalCaloriesKcal: number;
   } | null>(null);
@@ -805,9 +807,14 @@ export const LiveRunTracker: React.FC<LiveRunTrackerProps> = ({
               lat: milestoneLat,
               lng: milestoneLng,
             };
+            const totalDurationSec = Math.max(1, elapsedRef.current);
+            const avgPaceSecPerKm = Math.max(
+              1,
+              Math.round(totalDurationSec / Math.max(0.001, nextTotal / 1000))
+            );
             const totalCaloriesSoFar = estimateCaloriesKcal(
               workoutTypeRef.current,
-              elapsedRef.current,
+              totalDurationSec,
               nextTotal
             );
             const splitCalories = Math.max(
@@ -815,26 +822,29 @@ export const LiveRunTracker: React.FC<LiveRunTrackerProps> = ({
               totalCaloriesSoFar - lastSplitCaloriesRef.current
             );
             lastSplitDistRef.current = nextTotal;
-            lastSplitTimeRef.current = elapsedRef.current;
+            lastSplitTimeRef.current = totalDurationSec;
             lastSplitCaloriesRef.current = totalCaloriesSoFar;
             setSplits((prevSplits) => [...prevSplits, splitRec]);
             setKmMilestoneToast({
               km: completedKms,
               splitDurationSec,
+              totalDurationSec,
               paceSecPerKm: splitDurationSec,
+              avgPaceSecPerKm,
               caloriesKcal: splitCalories,
               totalCaloriesKcal: totalCaloriesSoFar,
             });
             setTimeout(() => {
               setKmMilestoneToast((cur) => (cur?.km === completedKms ? null : cur));
-            }, 5500);
+            }, 7000);
             if (navigator.vibrate) navigator.vibrate([120, 60, 120]);
             lastStartSpokenAtRef.current = Date.now();
-            const spokenTime = formatSpokenDuration(splitDurationSec);
+            const kmWord = completedKms === 1 ? 'kilometre' : 'kilometres';
+            const spokenSplitTime = formatSpokenDuration(splitDurationSec);
+            const spokenTotalTime = formatSpokenDuration(totalDurationSec);
+            const spokenAvgPace = formatSpokenDuration(avgPaceSecPerKm);
             speak(
-              completedKms === 1
-                ? `${completedKms} kilometre completed in ${spokenTime}. ${totalCaloriesSoFar} calories burnt.`
-                : `${completedKms} kilometres completed in ${spokenTime}. ${splitCalories} calories burnt this kilometre, ${totalCaloriesSoFar} calories total.`,
+              `Total distance ${completedKms} ${kmWord}. Latest kilometre in ${spokenSplitTime}. Total time ${spokenTotalTime}. Average pace ${spokenAvgPace} per kilometre. Calories burnt ${totalCaloriesSoFar}.`,
               { chime: true }
             );
           }
@@ -1871,9 +1881,13 @@ export const LiveRunTracker: React.FC<LiveRunTrackerProps> = ({
       {kmMilestoneToast && (
         <div className="z-30 shrink-0 border-b border-[#9AE62E]/40 bg-[#9AE62E] px-4 py-2 text-[#172D27]">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 font-mono text-xs font-bold tabular-nums">
-            <span className="flex items-center gap-2">
-              <Flag className="h-3.5 w-3.5 fill-current" />
-              KM {kmMilestoneToast.km} COMPLETED · {formatDuration(kmMilestoneToast.splitDurationSec)} ({formatPace(kmMilestoneToast.paceSecPerKm, preferredUnit)}/{preferredUnit}) · {kmMilestoneToast.caloriesKcal} kcal ({kmMilestoneToast.totalCaloriesKcal} kcal total)
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <Flag className="h-3.5 w-3.5 shrink-0 fill-current" />
+              <span>{kmMilestoneToast.km} KM TOTAL</span>
+              <span>· Split {formatDuration(kmMilestoneToast.splitDurationSec)}</span>
+              <span>· Total {formatDuration(kmMilestoneToast.totalDurationSec)}</span>
+              <span>· Avg {formatPace(kmMilestoneToast.avgPaceSecPerKm, preferredUnit)}/{preferredUnit}</span>
+              <span>· {kmMilestoneToast.totalCaloriesKcal} kcal</span>
             </span>
             <button
               type="button"

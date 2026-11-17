@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Camera,
   Copy,
   Download,
   Edit3,
@@ -17,6 +18,7 @@ import {
   ElevationProfileCard,
   type ElevationFetchStatus,
 } from '../components/ElevationProfileCard';
+import { HydrationLossCard } from '../components/HydrationLossCard';
 import { RunVideoModal } from '../components/RunVideoModal';
 import { ShareCardModal } from '../components/ShareCardModal';
 import { TricityMap } from '../components/TricityMap';
@@ -181,6 +183,7 @@ export const MyRunsView: React.FC<MyRunsViewProps> = ({
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [shareModalCard, setShareModalCard] = useState<PreparedShareCard | null>(null);
   const [videoRunPayload, setVideoRunPayload] = useState<RunVideoPayload | null>(null);
+  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
   const elevCacheRef = useRef<Map<string, ElevationAnalysisResult>>(new Map());
   const [selectedRunElev, setSelectedRunElev] = useState<{
     status: ElevationFetchStatus;
@@ -669,7 +672,15 @@ export const MyRunsView: React.FC<MyRunsViewProps> = ({
                           ? ` · ${formatElevationGain(run.elevationGainMeters, unit)} elev`
                           : ''}{' '}
                         · {kcal} kcal
+                        {run.photos && run.photos.length > 0
+                          ? ` · ${run.photos.length} ${run.photos.length === 1 ? 'photo' : 'photos'}`
+                          : ''}
                       </p>
+                      {run.notes && (
+                        <p className="mt-1 line-clamp-1 text-xs text-[#5B6B64]">
+                          {run.notes}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -975,6 +986,48 @@ export const MyRunsView: React.FC<MyRunsViewProps> = ({
                 unit={unit}
               />
 
+              <HydrationLossCard
+                compact
+                durationSec={selectedRun.durationSec}
+                caloriesKcal={selKcal}
+                avgPaceSecPerKm={selectedRun.avgPaceSecPerKm}
+                workoutType={selMeta.id}
+                lat={selectedRunPreview?.start.lat}
+                lng={selectedRunPreview?.start.lng}
+              />
+
+              {(selectedRun.notes || (selectedRun.photos && selectedRun.photos.length > 0)) && (
+                <div className="rounded-xl border border-[#E5E3DC] bg-[#F6F5F0]/50 p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-[#141F1B]">
+                    <Camera className="h-3.5 w-3.5 text-[#30483E]" />
+                    <span>{selMeta.pastNoun} Notes &amp; Photos</span>
+                  </div>
+                  {selectedRun.notes && (
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-[#141F1B]">
+                      {selectedRun.notes}
+                    </p>
+                  )}
+                  {selectedRun.photos && selectedRun.photos.length > 0 && (
+                    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                      {selectedRun.photos.map((photoSrc, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setLightboxPhoto(photoSrc)}
+                          className="group aspect-[4/3] overflow-hidden rounded-xl border border-[#E5E3DC] bg-white focus:outline-none"
+                        >
+                          <img
+                            src={photoSrc}
+                            alt={`${selectedRun.routeName} photo ${idx + 1}`}
+                            className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {selectedRunSplits.bars.length > 0 && (
                 <div className="rounded-xl border border-[#E5E3DC] p-3.5 space-y-2.5">
                   <div className="flex items-center justify-between gap-2">
@@ -1129,6 +1182,28 @@ export const MyRunsView: React.FC<MyRunsViewProps> = ({
         preferredUnit={unit}
         onClose={() => setVideoRunPayload(null)}
       />
+
+      {lightboxPhoto && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setLightboxPhoto(null)}
+        >
+          <button
+            type="button"
+            aria-label="Close photo preview"
+            onClick={() => setLightboxPhoto(null)}
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img
+            src={lightboxPhoto}
+            alt="Full-size run view"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[88dvh] max-w-[92vw] rounded-2xl object-contain shadow-2xl"
+          />
+        </div>
+      )}
     </div>
   );
 };

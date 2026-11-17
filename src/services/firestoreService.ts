@@ -34,7 +34,9 @@ import type {
   PersonalInviteStatus,
   RunActivityDoc,
   RunArtDesignDoc,
+  RunClubDoc,
   RunnerDirectoryDoc,
+  RunningShoeItem,
   RunStoryDoc,
   SavedRouteDoc,
   StoryThemeColor,
@@ -257,6 +259,7 @@ export async function syncRunnerDirectoryCard(
     city?: string;
     bio?: string;
     bioTags?: string[];
+    isPrivate?: boolean;
     preferredWorkout?: WorkoutType;
     totalDistanceKm?: number;
     totalRuns?: number;
@@ -268,6 +271,7 @@ export async function syncRunnerDirectoryCard(
       uid,
       displayName: cleanName,
       city: (data.city || 'Chandigarh').trim().slice(0, 80) || 'Chandigarh',
+      isPrivate: Boolean(data.isPrivate),
       totalDistanceKm: Number(Math.max(0, data.totalDistanceKm ?? 0).toFixed(2)),
       totalRuns: Math.max(0, Math.round(data.totalRuns ?? 0)),
       updatedAt: serverTimestamp(),
@@ -317,6 +321,7 @@ export async function ensureUserProfile(
         city: existing.city,
         bio: existing.bio,
         bioTags: existing.bioTags,
+        isPrivate: Boolean(existing.isPrivate),
         preferredWorkout: existing.preferredWorkout,
         totalDistanceKm: existing.totalDistanceKm,
         totalRuns: existing.totalRuns,
@@ -376,6 +381,31 @@ export async function ensureUserProfile(
   }
 }
 
+export function sanitizeRunningShoes(shoes?: RunningShoeItem[] | null): RunningShoeItem[] {
+  if (!Array.isArray(shoes)) return [];
+  const valid: RunningShoeItem[] = [];
+  for (const item of shoes) {
+    if (valid.length >= 12) break;
+    if (!item || typeof item !== 'object') continue;
+    const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim().slice(0, 64) : makeSafeId('shoe');
+    const name = typeof item.name === 'string' ? item.name.trim().slice(0, 80) : '';
+    if (!name) continue;
+    const brand = typeof item.brand === 'string' && item.brand.trim() ? item.brand.trim().slice(0, 40) : undefined;
+    const distanceKm = Number(Math.min(50000, Math.max(0, Number(item.distanceKm) || 0)).toFixed(2));
+    const maxKm = Math.min(5000, Math.max(100, Math.round(Number(item.maxKm) || 600)));
+    const entry: RunningShoeItem = {
+      id,
+      name,
+      distanceKm,
+      maxKm,
+      isPrimary: Boolean(item.isPrimary),
+    };
+    if (brand) entry.brand = brand;
+    valid.push(entry);
+  }
+  return valid;
+}
+
 export async function updateUserProfile(
   uid: string,
   updates: Partial<
@@ -391,6 +421,8 @@ export async function updateUserProfile(
       | 'cityLng'
       | 'bio'
       | 'bioTags'
+      | 'isPrivate'
+      | 'shoes'
     >
   >
 ): Promise<void> {
@@ -429,6 +461,12 @@ export async function updateUserProfile(
     if (updates.bioTags !== undefined) {
       payload.bioTags = sanitizeBioTags(updates.bioTags);
     }
+    if (updates.isPrivate !== undefined) {
+      payload.isPrivate = Boolean(updates.isPrivate);
+    }
+    if (updates.shoes !== undefined) {
+      payload.shoes = sanitizeRunningShoes(updates.shoes);
+    }
     await updateDoc(doc(db, 'users', uid), payload);
     const freshSnap = await getDoc(doc(db, 'users', uid));
     if (freshSnap.exists()) {
@@ -440,6 +478,7 @@ export async function updateUserProfile(
         city: fresh.city,
         bio: fresh.bio,
         bioTags: fresh.bioTags,
+        isPrivate: Boolean(fresh.isPrivate),
         preferredWorkout: fresh.preferredWorkout,
         totalDistanceKm: fresh.totalDistanceKm,
         totalRuns: fresh.totalRuns,
@@ -596,6 +635,13 @@ export async function saveCompletedRun(
     if (typeof run.caloriesKcal === 'number' && Number.isFinite(run.caloriesKcal) && run.caloriesKcal >= 0) {
       runDoc.caloriesKcal = Math.min(20000, Math.round(run.caloriesKcal));
     }
+    if (typeof run.notes === 'string' && run.notes.trim()) {
+      runDoc.notes = run.notes.trim().slice(0, 500);
+    }
+    const cleanPhotos = sanitizeRunPhotos(run.photos);
+    if (cleanPhotos.length > 0) {
+      runDoc.photos = cleanPhotos;
+    }
     await setDoc(doc(db, 'runs', runId), runDoc);
 
     // Batch GPS samples into chunks of 200 (never individual writes per point)
@@ -622,14 +668,26 @@ export async function saveCompletedRun(
           : existingProfile.bestPaceSecPerKm;
       const nextTotalDist = Number(((existingProfile.totalDistanceKm || 0) + distKm).toFixed(2));
       const nextTotalRuns = (existingProfile.totalRuns || 0) + 1;
-      await updateDoc(doc(db, 'users', uid), {
+      const userUpdatePayload: Record<string, unknown> = {
         totalDistanceKm: nextTotalDist,
         totalRuns: nextTotalRuns,
         totalDurationSec: (existingProfile.totalDurationSec || 0) + Math.round(run.durationSec),
         longestRunKm: Number(Math.max(existingProfile.longestRunKm || 0, distKm).toFixed(2)),
         bestPaceSecPerKm: nextBestPace,
         updatedAt: serverTimestamp(),
-      });
+      };
+      const isFootWorkout = workoutType === 'running' || workoutType === 'trail_run' || workoutType === 'walking';
+      if (isFootWorkout && distKm > 0 && Array.isArray(existingProfile.shoes) && existingProfile.shoes.length > 0) {
+        const primaryIdx = existingProfile.shoes.findIndex((s) => s.isPrimary);
+        const targetIdx = primaryIdx >= 0 ? primaryIdx : 0;
+        const updatedShoes = existingProfile.shoes.map((shoe, idx) =>
+          idx === targetIdx
+            ? { ...shoe, distanceKm: Number(((shoe.distanceKm || 0) + distKm).toFixed(2)) }
+            : shoe
+        );
+        userUpdatePayload.shoes = sanitizeRunningShoes(updatedShoes);
+      }
+      await updateDoc(doc(db, 'users', uid), userUpdatePayload);
       void syncRunnerDirectoryCard(uid, {
         username: existingProfile.username,
         displayName: existingProfile.displayName,
@@ -637,6 +695,7 @@ export async function saveCompletedRun(
         city: existingProfile.city,
         bio: existingProfile.bio,
         bioTags: existingProfile.bioTags,
+        isPrivate: Boolean(existingProfile.isPrivate),
         preferredWorkout: existingProfile.preferredWorkout,
         totalDistanceKm: nextTotalDist,
         totalRuns: nextTotalRuns,
@@ -646,6 +705,48 @@ export async function saveCompletedRun(
     return runId;
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export function sanitizeRunPhotos(photos?: string[] | null): string[] {
+  if (!Array.isArray(photos)) return [];
+  const valid: string[] = [];
+  for (const item of photos) {
+    if (valid.length >= 4) break;
+    if (
+      typeof item === 'string' &&
+      item.length <= 120000 &&
+      /^data:image\/(jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(item)
+    ) {
+      valid.push(item);
+    }
+  }
+  return valid;
+}
+
+export async function updateRunJournal(
+  runId: string,
+  updates: { notes?: string; photos?: string[]; shoeBrand?: string; shoeName?: string }
+): Promise<void> {
+  const path = `runs/${runId}`;
+  try {
+    const payload: Record<string, unknown> = {};
+    if (updates.notes !== undefined) {
+      payload.notes = updates.notes.trim().slice(0, 500);
+    }
+    if (updates.photos !== undefined) {
+      payload.photos = sanitizeRunPhotos(updates.photos);
+    }
+    if (updates.shoeBrand !== undefined) {
+      payload.shoeBrand = updates.shoeBrand.trim().slice(0, 40);
+    }
+    if (updates.shoeName !== undefined) {
+      payload.shoeName = updates.shoeName.trim().slice(0, 80);
+    }
+    if (Object.keys(payload).length === 0) return;
+    await updateDoc(doc(db, 'runs', runId), payload);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
 
@@ -1224,21 +1325,26 @@ export interface SendDmInput {
 
 export async function sendDmMessage(
   threadId: string,
-  friendRequest: FriendRequestDoc,
+  friendRequest: FriendRequestDoc | null,
   sender: { uid: string; displayName: string },
-  input: SendDmInput
+  input: SendDmInput,
+  recipient?: { uid: string; isPrivate?: boolean }
 ): Promise<string> {
   const msgId = makeSafeId('msg');
   const path = `dm_threads/${threadId}/messages/${msgId}`;
   try {
-    if (friendRequest.status !== 'accepted') {
-      throw new Error('Accept the friend request before sending direct messages.');
+    const isAcceptedFriend = friendRequest?.status === 'accepted';
+    const isPublicProfile = Boolean(recipient && !recipient.isPrivate);
+    if (!isAcceptedFriend && !isPublicProfile) {
+      throw new Error('This runner has a private profile. Accept a friend request before sending direct messages.');
     }
 
     const threadRef = doc(db, 'dm_threads', threadId);
     const threadSnap = await getDoc(threadRef);
     const cleanSenderName = (sender.displayName || 'Chandigarh Runner').trim().slice(0, 80) || 'Chandigarh Runner';
-    const participantUids = [...friendRequest.participantUids];
+    const participantUids = friendRequest
+      ? [...friendRequest.participantUids]
+      : [sender.uid, recipient!.uid].sort();
 
     const isInvite = input.messageType === 'run_invite';
     const isLocation = input.messageType === 'location';
@@ -1348,9 +1454,14 @@ export async function respondPersonalRunInvite(
 /* Social: Daily Run Posts, Likes & 24h Run Stories                           */
 /* -------------------------------------------------------------------------- */
 
-export function subscribeDailyRunPosts(onData: (posts: DailyRunPostDoc[]) => void) {
+export function subscribeDailyRunPosts(
+  onData: (posts: DailyRunPostDoc[]) => void,
+  includeFriendsPosts = false
+) {
   const path = 'daily_posts';
-  const q = query(collection(db, 'daily_posts'), where('visibility', '==', 'public'));
+  const q = includeFriendsPosts
+    ? query(collection(db, 'daily_posts'), where('visibility', 'in', ['public', 'friends']))
+    : query(collection(db, 'daily_posts'), where('visibility', '==', 'public'));
   return onSnapshot(
     q,
     (snap) => {
@@ -1386,7 +1497,11 @@ export interface CreateDailyRunPostInput {
   elevationGainMeters?: number;
   startName: string;
   encodedPolyline?: string;
+  photos?: string[];
+  shoeBrand?: string;
+  shoeName?: string;
   moodTag?: string;
+  visibility?: 'public' | 'friends';
 }
 
 export async function createDailyRunPost(
@@ -1408,7 +1523,7 @@ export async function createDailyRunPost(
       avgPaceSecPerKm: Math.min(3600, Math.max(0, Math.round(input.avgPaceSecPerKm || 0))),
       startName: input.startName.trim().slice(0, 140) || 'Chandigarh',
       likeCount: 0,
-      visibility: 'public',
+      visibility: input.visibility === 'friends' ? 'friends' : 'public',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -1426,8 +1541,18 @@ export async function createDailyRunPost(
     if (input.encodedPolyline && input.encodedPolyline.trim()) {
       payload.encodedPolyline = input.encodedPolyline.trim().slice(0, 25000);
     }
+    const cleanPhotos = sanitizeRunPhotos(input.photos);
+    if (cleanPhotos.length > 0) {
+      payload.photos = cleanPhotos;
+    }
     if (input.moodTag && input.moodTag.trim()) {
       payload.moodTag = input.moodTag.trim().slice(0, 30);
+    }
+    if (input.shoeBrand && input.shoeBrand.trim()) {
+      payload.shoeBrand = input.shoeBrand.trim().slice(0, 40);
+    }
+    if (input.shoeName && input.shoeName.trim()) {
+      payload.shoeName = input.shoeName.trim().slice(0, 80);
     }
     await setDoc(doc(db, 'daily_posts', postId), payload);
     return postId;
@@ -1673,3 +1798,142 @@ export function subscribeFriendsLiveBeacons(
     }
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/* Running Clubs: Create, Join, Leave, Delete                                 */
+/* -------------------------------------------------------------------------- */
+
+export function subscribeRunClubs(onData: (clubs: RunClubDoc[]) => void) {
+  const path = 'run_clubs';
+  const q = query(collection(db, 'run_clubs'), where('memberCount', '>=', 1));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const items = snap.docs
+        .map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<RunClubDoc, 'id'>),
+        }))
+        .sort((a, b) => (b.memberCount || 0) - (a.memberCount || 0));
+      onData(items);
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
+    }
+  );
+}
+
+export async function checkUserJoinedClubs(clubIds: string[], uid: string): Promise<Set<string>> {
+  const joined = new Set<string>();
+  if (!uid || clubIds.length === 0) return joined;
+  await Promise.all(
+    clubIds.map(async (clubId) => {
+      try {
+        const snap = await getDoc(doc(db, 'run_clubs', clubId, 'members', uid));
+        if (snap.exists()) joined.add(clubId);
+      } catch {
+        // Ignore individual lookup errors
+      }
+    })
+  );
+  return joined;
+}
+
+export async function createRunClub(
+  owner: { uid: string; displayName: string },
+  input: { name: string; description: string; city: string; tags: string[] }
+): Promise<string> {
+  const clubId = makeSafeId('club');
+  const path = `run_clubs/${clubId}`;
+  try {
+    const cleanOwnerName = (owner.displayName || 'Open Runner').trim().slice(0, 80) || 'Open Runner';
+    const cleanName = input.name.trim().slice(0, 80);
+    const cleanDesc = input.description.trim().slice(0, 400);
+    const cleanCity = (input.city || 'Chandigarh').trim().slice(0, 80) || 'Chandigarh';
+    const cleanTags = sanitizeBioTags(input.tags);
+
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'run_clubs', clubId), {
+      name: cleanName,
+      description: cleanDesc,
+      city: cleanCity,
+      tags: cleanTags,
+      ownerUid: owner.uid,
+      ownerName: cleanOwnerName,
+      memberCount: 1,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'run_clubs', clubId, 'members', owner.uid), {
+      clubId,
+      userId: owner.uid,
+      memberName: cleanOwnerName,
+      role: 'owner',
+      joinedAt: serverTimestamp(),
+    });
+    await batch.commit();
+    return clubId;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export async function joinRunClub(
+  clubId: string,
+  uid: string,
+  memberName: string
+): Promise<void> {
+  const path = `run_clubs/${clubId}`;
+  try {
+    const clubRef = doc(db, 'run_clubs', clubId);
+    const memberRef = doc(db, 'run_clubs', clubId, 'members', uid);
+    const [clubSnap, memberSnap] = await Promise.all([getDoc(clubRef), getDoc(memberRef)]);
+    if (!clubSnap.exists() || memberSnap.exists()) return;
+    const data = clubSnap.data() as Omit<RunClubDoc, 'id'>;
+    const batch = writeBatch(db);
+    batch.set(memberRef, {
+      clubId,
+      userId: uid,
+      memberName: (memberName || 'Open Runner').trim().slice(0, 80) || 'Open Runner',
+      role: 'member',
+      joinedAt: serverTimestamp(),
+    });
+    batch.update(clubRef, {
+      memberCount: (data.memberCount || 1) + 1,
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function leaveRunClub(clubId: string, uid: string): Promise<void> {
+  const path = `run_clubs/${clubId}`;
+  try {
+    const clubRef = doc(db, 'run_clubs', clubId);
+    const memberRef = doc(db, 'run_clubs', clubId, 'members', uid);
+    const [clubSnap, memberSnap] = await Promise.all([getDoc(clubRef), getDoc(memberRef)]);
+    if (!clubSnap.exists() || !memberSnap.exists()) return;
+    const data = clubSnap.data() as Omit<RunClubDoc, 'id'>;
+    const batch = writeBatch(db);
+    batch.delete(memberRef);
+    batch.update(clubRef, {
+      memberCount: Math.max(1, (data.memberCount || 1) - 1),
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteRunClub(clubId: string): Promise<void> {
+  const path = `run_clubs/${clubId}`;
+  try {
+    await deleteDoc(doc(db, 'run_clubs', clubId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+

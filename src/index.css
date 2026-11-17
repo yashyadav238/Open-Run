@@ -14,16 +14,207 @@
   --color-muted: #5B6B64;
 }
 
+:root,
+[data-theme="light"] {
+  --or-canvas: #F6F5F0;
+  --or-surface: #FFFFFF;
+  --or-surface-alpha: rgba(255, 255, 255, 0.95);
+  --or-surface-muted: #F0EFEA;
+  --or-surface-tint: #EBF5EE;
+  --or-border: #E5E3DC;
+  --or-border-strong: #D9D7CE;
+  --or-ink: #141F1B;
+  --or-muted: #5B6B64;
+  --or-brand: #172D27;
+  --or-brand-soft: #30483E;
+  --or-brand-text: #172D27;
+  --or-accent: #9AE62E;
+  --or-accent-ink: #172D27;
+  --or-accent-soft: #B8E8C7;
+}
+
+[data-theme="dark"] {
+  --or-canvas: #0B1210;
+  --or-surface: #131E1B;
+  --or-surface-alpha: rgba(19, 30, 27, 0.95);
+  --or-surface-muted: #1A2824;
+  --or-surface-tint: #1B3029;
+  --or-border: #253832;
+  --or-border-strong: #324A42;
+  --or-ink: #F2F7F5;
+  --or-muted: #9DB5AC;
+  --or-brand: #1D352E;
+  --or-brand-soft: #2C4D43;
+  --or-brand-text: #9AE62E;
+  --or-accent: #9AE62E;
+  --or-accent-ink: #0F1E1A;
+  --or-accent-soft: #B8E8C7;
+}
+
+[data-theme="ocean"] {
+  --or-canvas: #F1F6FA;
+  --or-surface: #FFFFFF;
+  --or-surface-alpha: rgba(255, 255, 255, 0.95);
+  --or-surface-muted: #E6EFF6;
+  --or-surface-tint: #E0F2FE;
+  --or-border: #D6E4F0;
+  --or-border-strong: #C2D6E8;
+  --or-ink: #0F2030;
+  --or-muted: #4E677D;
+  --or-brand: #0F2942;
+  --or-brand-soft: #1E4266;
+  --or-brand-text: #0F2942;
+  --or-accent: #38BDF8;
+  --or-accent-ink: #082032;
+  --or-accent-soft: #BAE6FD;
+}
+
+[data-theme="sunset"] {
+  --or-canvas: #FAF5F0;
+  --or-surface: #FFFFFF;
+  --or-surface-alpha: rgba(255, 255, 255, 0.95);
+  --or-surface-muted: #F3E9E0;
+  --or-surface-tint: #FFEDD5;
+  --or-border: #EAE0D5;
+  --or-border-strong: #DCCBBD;
+  --or-ink: #241612;
+  --or-muted: #725B52;
+  --or-brand: #2D1A14;
+  --or-brand-soft: #4F2D22;
+  --or-brand-text: #2D1A14;
+  --or-accent: #FB923C;
+  --or-accent-ink: #24120C;
+  --or-accent-soft: #FED7AA;
+}
+
+[data-theme="violet"] {
+  --or-canvas: #0E0B1A;
+  --or-surface: #17132B;
+  --or-surface-alpha: rgba(23, 19, 43, 0.95);
+  --or-surface-muted: #211B3B;
+  --or-surface-tint: #2A204C;
+  --or-border: #2F2652;
+  --or-border-strong: #413570;
+  --or-ink: #F4F2FF;
+  --or-muted: #A9A0C9;
+  --or-brand: #281E4A;
+  --or-brand-soft: #3D2E6E;
+  --or-brand-text: #C084FC;
+  --or-accent: #C084FC;
+  --or-accent-ink: #160D2B;
+  --or-accent-soft: #DDD6FE;
+}
+
+[data-theme="crimson"] {
+  --or-canvas: #110C0D;
+  --or-surface: #1C1315;
+  --or-surface-alpha: rgba(28, 19, 21, 0.95);
+  --or-surface-muted: #271B1E;
+  --or-surface-tint: #351B20;
+  --or-border: #382428;
+  --or-border-strong: #4D3137;
+  --or-ink: #FAF2F3;
+  --or-muted: #BDA0A5;
+  --or-brand: #3A151B;
+  --or-brand-soft: #57212A;
+  --or-brand-text: #FF6B70;
+  --or-accent: #FF5A5F;
+  --or-accent-ink: #1B090C;
+  --or-accent-soft: #FECACA;
+}
+
 @layer base {
   body {
     font-family: var(--font-sans);
-    background-color: #F6F5F0;
-    color: #141F1B;
+    background-color: var(--or-canvas);
+    color: var(--or-ink);
+    transition: background-color 180ms ease, color 180ms ease;
   }
 
   h1, h2, h3, .font-display {
     font-family: var(--font-display);
   }
+}
+
+/* Global theme token mapping for non-default themes */
+[data-theme]:not([data-theme="light"]) .bg-\[\#F6F5F0\] {
+  background-color: var(--or-canvas) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-white {
+  background-color: var(--or-surface) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-white\/95 {
+  background-color: var(--or-surface-alpha) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-\[\#F0EFEA\] {
+  background-color: var(--or-surface-muted) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-\[\#EBF5EE\] {
+  background-color: var(--or-surface-tint) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .border-\[\#E5E3DC\],
+[data-theme]:not([data-theme="light"]) .border-\[\#F0EFEA\] {
+  border-color: var(--or-border) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .border-\[\#D9D7CE\] {
+  border-color: var(--or-border-strong) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .text-\[\#141F1B\] {
+  color: var(--or-ink) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .text-\[\#5B6B64\] {
+  color: var(--or-muted) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-\[\#172D27\] {
+  background-color: var(--or-brand) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-\[\#30483E\] {
+  background-color: var(--or-brand-soft) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .text-\[\#172D27\] {
+  color: var(--or-brand-text) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .text-\[\#30483E\] {
+  color: var(--or-muted) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-\[\#9AE62E\] {
+  background-color: var(--or-accent) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .bg-\[\#9AE62E\] .text-\[\#172D27\],
+[data-theme]:not([data-theme="light"]) .bg-\[\#9AE62E\].text-\[\#172D27\] {
+  color: var(--or-accent-ink) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .text-\[\#9AE62E\] {
+  color: var(--or-accent) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .text-\[\#B8E8C7\] {
+  color: var(--or-accent-soft) !important;
+}
+
+[data-theme]:not([data-theme="light"]) .border-\[\#172D27\] {
+  border-color: var(--or-brand-text) !important;
+}
+
+[data-theme]:not([data-theme="light"]) input,
+[data-theme]:not([data-theme="light"]) select,
+[data-theme]:not([data-theme="light"]) textarea {
+  color: var(--or-ink);
 }
 
 .tabular-nums {

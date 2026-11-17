@@ -8,7 +8,15 @@ import {
 } from '../lib/geo';
 import type { LatLngLiteral, SplitRecord, WorkoutType } from '../types/run';
 
-export type ShareCardStyle = 'route' | 'splits' | 'adidas_poster' | 'pace_chart';
+export type ShareCardStyle =
+  | 'route'
+  | 'midnight_neon'
+  | 'topo_paper'
+  | 'sunset_glow'
+  | 'blueprint'
+  | 'splits'
+  | 'adidas_poster'
+  | 'pace_chart';
 
 export interface ShareCardStyleMeta {
   id: ShareCardStyle;
@@ -17,8 +25,12 @@ export interface ShareCardStyleMeta {
 }
 
 export const SHARE_CARD_STYLES: ShareCardStyleMeta[] = [
-  { id: 'route', label: 'Route Map', shortDesc: 'Map trace & 1K pins' },
-  { id: 'splits', label: 'KM Splits', shortDesc: 'Adidas-style split bars' },
+  { id: 'route', label: 'Forest Map', shortDesc: 'Classic dark pine map' },
+  { id: 'midnight_neon', label: 'Midnight Neon', shortDesc: 'Obsidian & glowing cyan' },
+  { id: 'topo_paper', label: 'Topo Paper', shortDesc: 'Warm vintage contour map' },
+  { id: 'sunset_glow', label: 'Golden Hour', shortDesc: 'Warm sunset gradient map' },
+  { id: 'blueprint', label: 'Blueprint', shortDesc: 'Technical cobalt grid map' },
+  { id: 'splits', label: 'KM Splits', shortDesc: 'Split bar breakdown' },
   { id: 'adidas_poster', label: 'Workout Poster', shortDesc: 'Bold activity poster' },
   { id: 'pace_chart', label: 'Pace Chart', shortDesc: 'KM split progression' },
 ];
@@ -923,6 +935,192 @@ function renderPaceChartStyleCard(
   ctx.fillText(safeFooter, 72, 968);
 }
 
+function renderThemedMapCard(
+  ctx: CanvasRenderingContext2D,
+  input: ShareCardRenderInput,
+  safePath: LatLngLiteral[],
+  theme: 'midnight_neon' | 'topo_paper' | 'sunset_glow' | 'blueprint'
+): void {
+  const palettes = {
+    midnight_neon: {
+      bgTop: '#05080F',
+      bgBottom: '#0B1324',
+      grid: 'rgba(56, 189, 248, 0.08)',
+      frameBg: 'rgba(15, 23, 42, 0.72)',
+      frameStroke: 'rgba(56, 189, 248, 0.25)',
+      routeGlow: 'rgba(34, 211, 238, 0.35)',
+      routeStroke: '#22D3EE',
+      startFill: '#9AE62E',
+      endFill: '#F43F5E',
+      titleColor: '#F8FAFC',
+      accentColor: '#22D3EE',
+      mutedColor: '#94A3B8',
+    },
+    topo_paper: {
+      bgTop: '#F5F0E3',
+      bgBottom: '#EAE2CE',
+      grid: 'rgba(48, 72, 62, 0.12)',
+      frameBg: 'rgba(255, 253, 247, 0.85)',
+      frameStroke: 'rgba(48, 72, 62, 0.28)',
+      routeGlow: 'rgba(23, 45, 39, 0.18)',
+      routeStroke: '#172D27',
+      startFill: '#15803D',
+      endFill: '#B91C1C',
+      titleColor: '#141F1B',
+      accentColor: '#172D27',
+      mutedColor: '#5B6B64',
+    },
+    sunset_glow: {
+      bgTop: '#431407',
+      bgBottom: '#9A3412',
+      grid: 'rgba(254, 215, 170, 0.10)',
+      frameBg: 'rgba(67, 20, 7, 0.52)',
+      frameStroke: 'rgba(251, 191, 36, 0.32)',
+      routeGlow: 'rgba(251, 191, 36, 0.35)',
+      routeStroke: '#FBBF24',
+      startFill: '#4ADE80',
+      endFill: '#FFFFFF',
+      titleColor: '#FFFBEB',
+      accentColor: '#FDE68A',
+      mutedColor: '#FDBA74',
+    },
+    blueprint: {
+      bgTop: '#0F2952',
+      bgBottom: '#173E7A',
+      grid: 'rgba(191, 219, 254, 0.14)',
+      frameBg: 'rgba(15, 41, 82, 0.55)',
+      frameStroke: 'rgba(191, 219, 254, 0.42)',
+      routeGlow: 'rgba(255, 255, 255, 0.25)',
+      routeStroke: '#FFFFFF',
+      startFill: '#9AE62E',
+      endFill: '#FACC15',
+      titleColor: '#FFFFFF',
+      accentColor: '#93C5FD',
+      mutedColor: '#BFDBFE',
+    },
+  };
+  const p = palettes[theme];
+
+  const grad = ctx.createLinearGradient(0, 0, 1080, 1080);
+  grad.addColorStop(0, p.bgTop);
+  grad.addColorStop(1, p.bgBottom);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 1080, 1080);
+
+  // Subtle architectural grid or topo rings
+  ctx.strokeStyle = p.grid;
+  ctx.lineWidth = 1.5;
+  if (theme === 'topo_paper') {
+    for (let r = 120; r <= 900; r += 85) {
+      ctx.beginPath();
+      ctx.ellipse(540, 480, r, r * 0.68, -0.2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else {
+    for (let x = 60; x < 1080; x += 60) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, 1080);
+      ctx.stroke();
+    }
+    for (let y = 60; y < 1080; y += 60) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(1080, y);
+      ctx.stroke();
+    }
+  }
+
+  // Header
+  ctx.fillStyle = p.accentColor;
+  ctx.font = '700 24px monospace';
+  ctx.fillText((input.subtitle || 'OPEN RUN').slice(0, 48), 72, 92);
+
+  ctx.fillStyle = p.titleColor;
+  ctx.font = '800 50px sans-serif';
+  ctx.fillText((input.title || 'Workout Route').slice(0, 32), 72, 158);
+
+  // Map Frame
+  const boxX = 72;
+  const boxY = 196;
+  const boxW = 936;
+  const boxH = 560;
+  ctx.fillStyle = p.frameBg;
+  ctx.strokeStyle = p.frameStroke;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.roundRect(boxX, boxY, boxW, boxH, 28);
+  ctx.fill();
+  ctx.stroke();
+
+  if (safePath.length >= 2) {
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+    for (const pt of safePath) {
+      if (pt.lat < minLat) minLat = pt.lat;
+      if (pt.lat > maxLat) maxLat = pt.lat;
+      if (pt.lng < minLng) minLng = pt.lng;
+      if (pt.lng > maxLng) maxLng = pt.lng;
+    }
+    const midLat = (minLat + maxLat) / 2;
+    const cosLat = Math.cos((midLat * Math.PI) / 180);
+    const spanLat = Math.max(0.001, maxLat - minLat);
+    const spanLng = Math.max(0.001, (maxLng - minLng) * cosLat);
+    const pad = 64;
+    const scale = Math.min((boxW - pad * 2) / spanLng, (boxH - pad * 2) / spanLat);
+    const toXY = (pt: LatLngLiteral) => ({
+      x: boxX + boxW / 2 + (pt.lng - (minLng + maxLng) / 2) * cosLat * scale,
+      y: boxY + boxH / 2 - (pt.lat - midLat) * scale,
+    });
+
+    const pts = safePath.map(toXY);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    // Glow stroke
+    ctx.strokeStyle = p.routeGlow;
+    ctx.lineWidth = 18;
+    ctx.beginPath();
+    pts.forEach((pt, idx) => (idx === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
+    ctx.stroke();
+
+    // Main route stroke
+    ctx.strokeStyle = p.routeStroke;
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    pts.forEach((pt, idx) => (idx === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
+    ctx.stroke();
+
+    // Start & Finish dots
+    const startPt = pts[0];
+    const endPt = pts[pts.length - 1];
+    ctx.fillStyle = p.startFill;
+    ctx.beginPath();
+    ctx.arc(startPt.x, startPt.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = p.endFill;
+    ctx.beginPath();
+    ctx.arc(endPt.x, endPt.y, 12, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Primary stat + secondary metrics
+  ctx.fillStyle = p.accentColor;
+  ctx.font = '800 84px monospace';
+  ctx.fillText(input.primaryStatValue || '0.00 km', 72, 868);
+
+  ctx.fillStyle = p.titleColor;
+  ctx.font = '600 28px monospace';
+  ctx.fillText((input.secondaryLine || '').slice(0, 56), 72, 922);
+
+  ctx.fillStyle = p.mutedColor;
+  ctx.font = '500 22px sans-serif';
+  ctx.fillText((input.footerText || 'OPEN RUN').slice(0, 68), 72, 976);
+}
+
 export function renderRunShareCardSync(input: ShareCardRenderInput): RenderedShareCard | null {
   if (typeof document === 'undefined') return null;
 
@@ -946,6 +1144,13 @@ export function renderRunShareCardSync(input: ShareCardRenderInput): RenderedSha
     renderAdidasPosterStyleCard(ctx, input, safePath, safeIntended);
   } else if (style === 'pace_chart') {
     renderPaceChartStyleCard(ctx, input, safePath);
+  } else if (
+    style === 'midnight_neon' ||
+    style === 'topo_paper' ||
+    style === 'sunset_glow' ||
+    style === 'blueprint'
+  ) {
+    renderThemedMapCard(ctx, input, safePath, style);
   } else {
     renderRouteStyleCard(ctx, input, safePath, safeIntended);
   }

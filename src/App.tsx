@@ -6,13 +6,16 @@ import {
   Compass,
   Home,
   Megaphone,
+  MessageCircle,
   Navigation,
   Play,
   User,
   Users,
 } from 'lucide-react';
 import { AuthModal } from './components/AuthModal';
+import { BrutalQuoteOverlay } from './components/BrutalQuoteOverlay';
 import { LiveRunTracker } from './components/LiveRunTracker';
+import { MusicPlayerDock } from './components/MusicPlayerDock';
 import type { ElevationFetchStatus } from './components/ElevationProfileCard';
 import { RunSummaryModal, type AutoSaveStatus } from './components/RunSummaryModal';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -27,9 +30,11 @@ import {
 import { getWorkoutMeta, normalizeWorkoutType } from './data/workouts';
 import { decodePolyline } from './lib/geo';
 import { resolveGoogleMapsApiKey } from './lib/mapsConfig';
+import { applyAppTheme, loadSavedTheme, type AppThemeId } from './lib/theme';
 import { fetchDetailedElevation } from './services/routingService';
 import { ExploreView } from './pages/ExploreView';
 import { HomeView } from './pages/HomeView';
+import { MessagesView } from './pages/MessagesView';
 import { MyRunsView } from './pages/MyRunsView';
 import { OpenInvitesView } from './pages/OpenInvitesView';
 import { PlanRunView, type PlannerInitialRequest } from './pages/PlanRunView';
@@ -41,6 +46,7 @@ import {
   subscribeFriendsLiveBeacons,
   subscribeMyFriendRequests,
   subscribeOpenRunInvites,
+  updateRunJournal,
 } from './services/firestoreService';
 import {
   getPendingUnsyncedRuns,
@@ -87,8 +93,9 @@ const NAV_ITEMS: Array<{
 }> = [
   { id: 'home', label: 'Home', icon: Home },
   { id: 'plan', label: 'Plan Run', mobileLabel: 'Plan', icon: Navigation },
-  { id: 'social', label: 'Social & DMs', mobileLabel: 'Social', icon: Users },
-  { id: 'invites', label: 'Open Invites', mobileLabel: 'Invites', icon: Megaphone },
+  { id: 'messages', label: 'Messages', mobileLabel: 'DMs', icon: MessageCircle },
+  { id: 'social', label: 'Social', mobileLabel: 'Social', icon: Users },
+  { id: 'invites', label: 'Open Invites', mobileLabel: 'Invites', showOnMobile: false, icon: Megaphone },
   { id: 'explore', label: 'Explore', showOnMobile: false, icon: Compass },
   { id: 'routes', label: 'My Routes', showOnMobile: false, icon: Bookmark },
   { id: 'history', label: 'Run History', mobileLabel: 'My Runs', icon: Activity },
@@ -99,6 +106,8 @@ function TricityRunShell() {
   const { user, profile, runs, savedRoutes, artDesigns, refreshProfile } = useAuth();
 
   const [activeTab, setActiveTab] = useState<AppTab>('home');
+  const [showStartupQuote, setShowStartupQuote] = useState(true);
+  const [uiTheme, setUiTheme] = useState<AppThemeId>(() => loadSavedTheme());
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState(false);
   const [guestCity, setGuestCity] = useState<ActiveRunningCity>(() => loadGuestRunningCity());
@@ -150,6 +159,10 @@ function TricityRunShell() {
       // ignore storage quota errors
     }
   }, []);
+
+  useEffect(() => {
+    applyAppTheme(uiTheme);
+  }, [uiTheme]);
 
   useEffect(() => {
     const handler = () => setMapsQuotaExceeded(true);
@@ -372,6 +385,53 @@ function TricityRunShell() {
     setCompletedRun(null);
   };
 
+  const handleSaveCompletedRunJournal = async (
+    notes: string,
+    photos: string[],
+    shoeBrand?: string,
+    shoeName?: string
+  ) => {
+    if (!completedRun) return;
+    const cleanNotes = notes.trim().slice(0, 500);
+    const cleanShoeBrand = (shoeBrand || '').trim().slice(0, 40);
+    const cleanShoeName = (shoeName || '').trim().slice(0, 80);
+    const updatedSummary: Omit<RunActivityDoc, 'id' | 'userId' | 'createdAt'> = {
+      ...completedRun.summary,
+      notes: cleanNotes,
+      photos,
+      shoeBrand: cleanShoeBrand || undefined,
+      shoeName: cleanShoeName || undefined,
+    };
+
+    setCompletedRun((prev) =>
+      prev && prev.localId === completedRun.localId
+        ? { ...prev, summary: updatedSummary }
+        : prev
+    );
+
+    const existingLocal = localRuns.find((r) => r.localId === completedRun.localId);
+    setLocalRuns(
+      upsertLocalRun({
+        localId: completedRun.localId,
+        ownerUid: user?.uid || null,
+        syncStatus: completedRun.syncedRunId ? 'synced' : 'pending',
+        syncedRunId: completedRun.syncedRunId,
+        summary: updatedSummary,
+        samples: completedRun.samples,
+        savedAt: existingLocal?.savedAt || new Date().toISOString(),
+      })
+    );
+
+    if (completedRun.syncedRunId && user && user.emailVerified) {
+      await updateRunJournal(completedRun.syncedRunId, {
+        notes: cleanNotes,
+        photos,
+        shoeBrand: cleanShoeBrand,
+        shoeName: cleanShoeName,
+      });
+    }
+  };
+
   const handleDeleteHistoryRun = async (runId: string) => {
     if (!runId.startsWith('local_run_')) {
       await deleteRunRecord(runId);
@@ -533,6 +593,21 @@ function TricityRunShell() {
               />
             )}
 
+            {activeTab === 'messages' && (
+              <MessagesView
+                userId={user?.uid || null}
+                userName={profile?.displayName || user?.displayName || 'Runner'}
+                emailVerified={Boolean(user?.emailVerified)}
+                defaultWorkoutType={selectedWorkout}
+                liveFriends={liveFriends}
+                onOpenAuth={() => setAuthModalOpen(true)}
+                onOpenSocialFriends={() => {
+                  setSocialSubTab('friends');
+                  setActiveTab('social');
+                }}
+              />
+            )}
+
             {activeTab === 'social' && (
               <SocialView
                 userId={user?.uid || null}
@@ -545,6 +620,7 @@ function TricityRunShell() {
                 activeCity={activeCity}
                 runs={mergedRuns}
                 savedRoutes={savedRoutes}
+                savedShoes={profile?.shoes}
                 liveFriends={liveFriends}
                 initialSubTab={socialSubTab}
                 draftRun={socialDraftRun}
@@ -665,6 +741,8 @@ function TricityRunShell() {
                 selectedWorkout={selectedWorkout}
                 onSelectWorkout={handleSelectWorkout}
                 onSelectCity={handleSelectCity}
+                activeTheme={uiTheme}
+                onSelectTheme={setUiTheme}
                 onOpenAuth={() => setAuthModalOpen(true)}
               />
             )}
@@ -702,6 +780,14 @@ function TricityRunShell() {
       </nav>
 
       {/* Modals & Live Run Overlays */}
+      {showStartupQuote && (
+        <BrutalQuoteOverlay
+          workoutLabel={getWorkoutMeta(selectedWorkout).label}
+          onDismiss={() => setShowStartupQuote(false)}
+          onQuickStart={() => setLiveRoute(null)}
+        />
+      )}
+
       <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
 
       {liveRoute !== undefined && (
@@ -815,6 +901,7 @@ function TricityRunShell() {
             (r) => r.id !== completedRun.localId && r.id !== completedRun.syncedRunId
           )}
           preferredUnit={unit}
+          savedShoes={profile?.shoes}
           isAuthenticated={Boolean(user)}
           saveStatus={completedRun.saveStatus}
           saveError={completedRun.saveError}
@@ -825,6 +912,7 @@ function TricityRunShell() {
               completedRun.samples
             )
           }
+          onSaveJournal={handleSaveCompletedRunJournal}
           onDiscardRun={handleDiscardCompletedRun}
           onPostDailyRun={() => {
             setSocialDraftRun({
@@ -869,6 +957,8 @@ function TricityRunShell() {
           }}
         />
       )}
+
+      <MusicPlayerDock />
     </div>
   );
 }

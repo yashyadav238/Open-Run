@@ -2,14 +2,19 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AtSign,
+  Camera,
   Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
   Copy,
+  Footprints,
   Heart,
+  ImagePlus,
+  Loader2,
   LocateFixed,
+  Lock,
   MapPin,
   MessageSquare,
   Navigation,
@@ -27,8 +32,10 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { ClubsSection } from '../components/ClubsSection';
 import { TricityMap } from '../components/TricityMap';
 import { WorkoutIcon, WorkoutSelector } from '../components/WorkoutIcon';
+import { MAX_RUN_PHOTOS, processRunPhotoFile } from '../lib/avatarUpload';
 import { TRICITY_START_PRESETS } from '../data/tricityPlaces';
 import {
   estimateCaloriesKcal,
@@ -80,13 +87,14 @@ import type {
   LiveBeaconDoc,
   RunActivityDoc,
   RunnerDirectoryDoc,
+  RunningShoeItem,
   RunStoryDoc,
   SavedRouteDoc,
   StoryThemeColor,
   WorkoutType,
 } from '../types/run';
 
-export type SocialSubTab = 'feed' | 'friends' | 'messages';
+export type SocialSubTab = 'feed' | 'clubs' | 'friends' | 'messages';
 
 export interface SocialDraftRun {
   mode: 'post' | 'story';
@@ -113,6 +121,7 @@ interface SocialViewProps {
   activeCity?: ActiveRunningCity;
   runs: RunActivityDoc[];
   savedRoutes: SavedRouteDoc[];
+  savedShoes?: RunningShoeItem[];
   liveFriends?: LiveBeaconDoc[];
   initialSubTab?: SocialSubTab;
   draftRun?: SocialDraftRun | null;
@@ -317,6 +326,7 @@ export const SocialView: React.FC<SocialViewProps> = ({
   activeCity = DEFAULT_RUNNING_CITY,
   runs,
   savedRoutes,
+  savedShoes = [],
   liveFriends = [],
   initialSubTab = 'feed',
   draftRun,
@@ -372,7 +382,13 @@ export const SocialView: React.FC<SocialViewProps> = ({
   const [postPolyline, setPostPolyline] = useState<string>('');
   const [postCaption, setPostCaption] = useState('');
   const [postMood, setPostMood] = useState('Strong');
+  const [postShoeBrand, setPostShoeBrand] = useState('');
+  const [postShoeName, setPostShoeName] = useState('');
+  const [postPhotos, setPostPhotos] = useState<string[]>([]);
+  const [uploadingPostPhoto, setUploadingPostPhoto] = useState(false);
   const [posting, setPosting] = useState(false);
+  const [lightboxPostPhoto, setLightboxPostPhoto] = useState<string | null>(null);
+  const postPhotoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Story Composer & Viewer state
   const [showStoryComposer, setShowStoryComposer] = useState(false);
@@ -489,15 +505,15 @@ export const SocialView: React.FC<SocialViewProps> = ({
     onClearDraftRun?.();
   }, [draftRun, onClearDraftRun, preferredUnit, defaultWorkoutType, activeCity.name]);
 
-  // Subscribe to public posts & active stories
+  // Subscribe to public (and friends-only when signed in) posts & active stories
   useEffect(() => {
-    const unsubPosts = subscribeDailyRunPosts(setPosts);
+    const unsubPosts = subscribeDailyRunPosts(setPosts, Boolean(userId));
     const unsubStories = subscribeActiveStories(setStories);
     return () => {
       unsubPosts();
       unsubStories();
     };
-  }, []);
+  }, [userId]);
 
   // Subscribe to authenticated runner directory, friend requests & DM threads
   useEffect(() => {
@@ -796,6 +812,7 @@ export const SocialView: React.FC<SocialViewProps> = ({
         : undefined
     );
     setPostPolyline(found.encodedPolyline || '');
+    setPostPhotos(found.photos ? found.photos.slice(0, MAX_RUN_PHOTOS) : []);
     if (!postCaption.trim()) {
       const kcal =
         typeof found.caloriesKcal === 'number' && found.caloriesKcal > 0
@@ -809,6 +826,40 @@ export const SocialView: React.FC<SocialViewProps> = ({
       setPostCaption(
         `Logged ${distKm} km ${getWorkoutMeta(wt).fullLabel.toLowerCase()} around ${found.startName || activeCity.name} (${formatDuration(found.durationSec)}${elevTxt}${calTxt})!`
       );
+    }
+  };
+
+  useEffect(() => {
+    if (showPostComposer && postRunId === 'custom' && runs.length > 0 && !draftRun) {
+      handleSelectRunForPost(runs[0].id);
+    }
+  }, [showPostComposer, postRunId, runs, draftRun]);
+
+  const handlePostPhotoFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (files.length === 0) return;
+
+    const remaining = MAX_RUN_PHOTOS - postPhotos.length;
+    if (remaining <= 0) {
+      showToast('err', `You can attach up to ${MAX_RUN_PHOTOS} photos per post.`);
+      return;
+    }
+
+    setUploadingPostPhoto(true);
+    try {
+      const added: string[] = [];
+      for (const file of files.slice(0, remaining)) {
+        const compressed = await processRunPhotoFile(file);
+        added.push(compressed);
+      }
+      if (added.length > 0) {
+        setPostPhotos((prev) => [...prev, ...added].slice(0, MAX_RUN_PHOTOS));
+      }
+    } catch (err) {
+      showToast('err', err instanceof Error ? err.message : 'Could not process selected photo.');
+    } finally {
+      setUploadingPostPhoto(false);
     }
   };
 
@@ -841,11 +892,17 @@ export const SocialView: React.FC<SocialViewProps> = ({
   const handleCreatePost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!requireVerifiedAction() || !userId) return;
+    const hasVerifiedRun = postRunId !== 'custom' || Boolean(draftRun);
+    if (!hasVerifiedRun) {
+      showToast('err', 'Complete a GPS workout first to publish a verified daily post.');
+      return;
+    }
     setPosting(true);
     try {
       const distKm = Math.max(0.1, Number(postDistanceKm) || 1);
       const durSec = Math.max(60, Math.round((Number(postDurationMin) || 1) * 60));
       const paceSec = Math.round(durSec / distKm);
+      const isMyProfilePrivate = Boolean(userId && runnerByUid.get(userId)?.isPrivate);
       await createDailyRunPost(
         { uid: userId, displayName: userName, photoURL: userPhotoUrl },
         {
@@ -858,13 +915,25 @@ export const SocialView: React.FC<SocialViewProps> = ({
           elevationGainMeters: postElevationGain,
           startName: postStartName.trim() || activeCity.name,
           encodedPolyline: postPolyline || undefined,
+          photos: postPhotos.length > 0 ? postPhotos : undefined,
+          shoeBrand: postShoeBrand.trim() || undefined,
+          shoeName: postShoeName.trim() || undefined,
           moodTag: postMood,
+          visibility: isMyProfilePrivate ? 'friends' : 'public',
         }
       );
       setShowPostComposer(false);
       setPostCaption('');
+      setPostShoeBrand('');
+      setPostShoeName('');
+      setPostPhotos([]);
       setPostElevationGain(undefined);
-      showToast('ok', `Your ${getWorkoutMeta(postWorkoutType).fullLabel.toLowerCase()} is now live on the community feed!`);
+      showToast(
+        'ok',
+        isMyProfilePrivate
+          ? 'Your workout post is live for your accepted friends!'
+          : `Your ${getWorkoutMeta(postWorkoutType).fullLabel.toLowerCase()} is now live on the community feed!`
+      );
     } catch (err) {
       showToast('err', err instanceof Error ? err.message : 'Could not publish workout post.');
     } finally {
@@ -1198,6 +1267,16 @@ export const SocialView: React.FC<SocialViewProps> = ({
           >
             <Sparkles className="h-3.5 w-3.5" />
             Daily Runs ({posts.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubTab('clubs')}
+            className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold ${
+              subTab === 'clubs' ? 'bg-[#172D27] text-[#9AE62E]' : 'text-[#5B6B64]'
+            }`}
+          >
+            <Users className="h-3.5 w-3.5" />
+            Clubs
           </button>
           <button
             type="button"
@@ -1801,6 +1880,18 @@ export const SocialView: React.FC<SocialViewProps> = ({
       )}
 
       {/* TAB 1: DAILY RUNS FEED */}
+      {subTab === 'clubs' && (
+        <ClubsSection
+          userId={userId}
+          userName={userName}
+          emailVerified={emailVerified}
+          defaultCity={activeCity.name}
+          defaultWorkoutType={defaultWorkoutType}
+          onOpenAuth={onOpenAuth}
+          onNotify={showToast}
+        />
+      )}
+
       {subTab === 'feed' && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#E5E3DC] bg-white p-4">
@@ -1832,7 +1923,12 @@ export const SocialView: React.FC<SocialViewProps> = ({
               className="space-y-4 rounded-2xl border border-[#172D27]/30 bg-white p-5 shadow-sm"
             >
               <div className="flex items-center justify-between">
-                <h3 className="font-display text-base font-bold text-[#141F1B]">Share Today&apos;s Workout</h3>
+                <div>
+                  <h3 className="font-display text-base font-bold text-[#141F1B]">Share Recorded Workout</h3>
+                  <p className="text-[11px] text-[#5B6B64]">
+                    Only verified GPS workouts can be posted · Workout stats are locked
+                  </p>
+                </div>
                 <button
                   type="button"
                   onClick={() => setShowPostComposer(false)}
@@ -1842,125 +1938,230 @@ export const SocialView: React.FC<SocialViewProps> = ({
                 </button>
               </div>
 
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-[#5B6B64]">Workout Sport</label>
-                <WorkoutSelector compact value={postWorkoutType} onChange={setPostWorkoutType} />
-              </div>
-
-              {runs.length > 0 && (
-                <div>
-                  <label className="text-xs font-semibold text-[#5B6B64]">
-                    Pick from your logged activities (auto-fills GPS route)
-                  </label>
-                  <select
-                    value={postRunId}
-                    onChange={(e) => handleSelectRunForPost(e.target.value)}
-                    className="mt-1 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 text-xs font-medium text-[#141F1B]"
-                  >
-                    <option value="custom">Enter custom daily workout details</option>
-                    {runs.slice(0, 15).map((r) => (
-                      <option key={r.id} value={r.id}>
-                        [{getWorkoutMeta(r.workoutType).label}] {r.routeName} — {(r.distanceMeters / 1000).toFixed(2)} km ({formatDuration(r.durationSec)})
-                      </option>
-                    ))}
-                  </select>
+              {runs.length === 0 && !draftRun ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-950">
+                  You don&apos;t have any recorded GPS workouts yet. Complete a run, ride, or walk first so your verified route map and stats can be shared to the community feed.
                 </div>
+              ) : (
+                <>
+                  {runs.length > 0 && (
+                    <div>
+                      <label className="text-xs font-semibold text-[#5B6B64]">
+                        Select Recorded Activity
+                      </label>
+                      <select
+                        value={postRunId}
+                        onChange={(e) => handleSelectRunForPost(e.target.value)}
+                        className="mt-1 min-h-[44px] w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 text-xs font-medium text-[#141F1B]"
+                      >
+                        {runs.slice(0, 15).map((r) => (
+                          <option key={r.id} value={r.id}>
+                            [{getWorkoutMeta(r.workoutType).label}] {r.routeName} — {(r.distanceMeters / 1000).toFixed(2)} km ({formatDuration(r.durationSec)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Read-Only Verified Workout Card */}
+                  <div className="rounded-xl border border-[#E5E3DC] bg-[#F6F5F0]/80 p-3.5 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-[#172D27] px-2 py-1 text-[10px] font-bold text-[#9AE62E]">
+                          <WorkoutIcon type={postWorkoutType} className="h-3 w-3" />
+                          {getWorkoutMeta(postWorkoutType).label}
+                        </span>
+                        <span className="truncate font-display text-sm font-bold text-[#141F1B]">
+                          {postTitle}
+                        </span>
+                      </div>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[#5B6B64]">
+                        <Lock className="h-3 w-3" />
+                        Verified Stats (Locked)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-center tabular-nums sm:grid-cols-4">
+                      <div className="rounded-lg bg-white p-2">
+                        <p className="text-[10px] text-[#5B6B64]">Distance</p>
+                        <p className="font-mono text-xs font-bold text-[#172D27]">{postDistanceKm} km</p>
+                      </div>
+                      <div className="rounded-lg bg-white p-2">
+                        <p className="text-[10px] text-[#5B6B64]">Duration</p>
+                        <p className="font-mono text-xs font-bold text-[#141F1B]">{postDurationMin} min</p>
+                      </div>
+                      <div className="rounded-lg bg-white p-2">
+                        <p className="text-[10px] text-[#5B6B64]">Area</p>
+                        <p className="truncate text-xs font-bold text-[#141F1B]">{postStartName}</p>
+                      </div>
+                      {typeof postElevationGain === 'number' && postElevationGain > 0 && (
+                        <div className="rounded-lg bg-white p-2">
+                          <p className="text-[10px] text-[#5B6B64]">Elev Gain</p>
+                          <p className="font-mono text-xs font-bold text-[#172D27]">+{Math.round(postElevationGain)} m</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Mood Tag */}
+                  <div>
+                    <label className="text-xs font-semibold text-[#5B6B64]">Mood Tag</label>
+                    <select
+                      value={postMood}
+                      onChange={(e) => setPostMood(e.target.value)}
+                      className="mt-1 min-h-[42px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 text-sm"
+                    >
+                      {MOOD_TAGS.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Caption */}
+                  <div>
+                    <label className="text-xs font-semibold text-[#5B6B64]">Caption / How did it feel?</label>
+                    <textarea
+                      rows={2}
+                      required
+                      maxLength={400}
+                      value={postCaption}
+                      onChange={(e) => setPostCaption(e.target.value)}
+                      placeholder="Breezy morning along the park footpath, sunrise views..."
+                      className="mt-1 w-full rounded-xl border border-[#D9D7CE] p-3 text-sm"
+                    />
+                  </div>
+
+                  {/* Running Shoe (optional) */}
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-[#5B6B64]">
+                      <Footprints className="h-3.5 w-3.5 text-[#30483E]" />
+                      Running Shoe (optional)
+                    </label>
+                    {savedShoes.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {savedShoes.map((shoe) => {
+                          const selected =
+                            postShoeName.trim().toLowerCase() === shoe.name.trim().toLowerCase() &&
+                            postShoeBrand.trim().toLowerCase() === (shoe.brand || '').trim().toLowerCase();
+                          return (
+                            <button
+                              key={shoe.id}
+                              type="button"
+                              onClick={() => {
+                                setPostShoeBrand(shoe.brand || '');
+                                setPostShoeName(shoe.name);
+                              }}
+                              className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
+                                selected
+                                  ? 'border-[#172D27] bg-[#172D27] text-[#9AE62E]'
+                                  : 'border-[#D9D7CE] bg-[#F6F5F0] text-[#141F1B] hover:border-[#30483E]'
+                              }`}
+                            >
+                              {shoe.brand ? `${shoe.brand} ${shoe.name}` : shoe.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="text"
+                        maxLength={40}
+                        value={postShoeBrand}
+                        onChange={(e) => setPostShoeBrand(e.target.value)}
+                        placeholder="Shoe Brand (e.g. Nike)"
+                        className="min-h-[40px] rounded-xl border border-[#D9D7CE] bg-white px-3 text-xs text-[#141F1B]"
+                      />
+                      <input
+                        type="text"
+                        maxLength={80}
+                        value={postShoeName}
+                        onChange={(e) => setPostShoeName(e.target.value)}
+                        placeholder="Shoe Model (e.g. Pegasus 41)"
+                        className="min-h-[40px] rounded-xl border border-[#D9D7CE] bg-white px-3 text-xs text-[#141F1B]"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Phone Photo Upload */}
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-1.5 text-xs font-semibold text-[#5B6B64]">
+                        <Camera className="h-3.5 w-3.5 text-[#30483E]" />
+                        Workout Photos (up to {MAX_RUN_PHOTOS})
+                      </label>
+                      <button
+                        type="button"
+                        disabled={uploadingPostPhoto || postPhotos.length >= MAX_RUN_PHOTOS}
+                        onClick={() => postPhotoInputRef.current?.click()}
+                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] px-3 text-xs font-semibold text-[#141F1B] hover:bg-[#E5E3DC] disabled:opacity-50"
+                      >
+                        {uploadingPostPhoto ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <ImagePlus className="h-3.5 w-3.5 text-[#30483E]" />
+                        )}
+                        {uploadingPostPhoto ? 'Processing...' : `Add Photos (${postPhotos.length}/${MAX_RUN_PHOTOS})`}
+                      </button>
+                    </div>
+                    <input
+                      ref={postPhotoInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handlePostPhotoFiles}
+                      className="hidden"
+                    />
+                    {postPhotos.length > 0 && (
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {postPhotos.map((src, idx) => (
+                          <div
+                            key={idx}
+                            className="relative aspect-[4/3] overflow-hidden rounded-xl border border-[#E5E3DC] bg-[#F6F5F0]"
+                          >
+                            <img
+                              src={src}
+                              alt={`Workout photo ${idx + 1}`}
+                              className="h-full w-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              aria-label={`Remove photo ${idx + 1}`}
+                              onClick={() =>
+                                setPostPhotos((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white hover:bg-red-600"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={posting || uploadingPostPhoto}
+                      className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#172D27] px-5 text-xs font-bold text-[#9AE62E] disabled:opacity-60"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      {posting ? 'Publishing...' : 'Publish Workout'}
+                    </button>
+                  </div>
+                </>
               )}
-
-              <div className="grid gap-3 sm:grid-cols-4">
-                <div className="sm:col-span-2">
-                  <label className="text-xs font-semibold text-[#5B6B64]">Workout Title</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={120}
-                    value={postTitle}
-                    onChange={(e) => setPostTitle(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-[#D9D7CE] px-3 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-[#5B6B64]">Distance (km)</label>
-                  <input
-                    type="number"
-                    required
-                    min={0.1}
-                    max={300}
-                    step={0.1}
-                    value={postDistanceKm}
-                    onChange={(e) => setPostDistanceKm(Number(e.target.value))}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-[#D9D7CE] px-3 font-mono text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-[#5B6B64]">Duration (min)</label>
-                  <input
-                    type="number"
-                    required
-                    min={1}
-                    max={1440}
-                    value={postDurationMin}
-                    onChange={(e) => setPostDurationMin(Number(e.target.value))}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-[#D9D7CE] px-3 font-mono text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="text-xs font-semibold text-[#5B6B64]">Start Area</label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={140}
-                    value={postStartName}
-                    onChange={(e) => setPostStartName(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-[#D9D7CE] px-3 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-[#5B6B64]">Mood Tag</label>
-                  <select
-                    value={postMood}
-                    onChange={(e) => setPostMood(e.target.value)}
-                    className="mt-1 min-h-[42px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 text-sm"
-                  >
-                    {MOOD_TAGS.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-semibold text-[#5B6B64]">Caption / How did it feel?</label>
-                <textarea
-                  rows={2}
-                  required
-                  maxLength={400}
-                  value={postCaption}
-                  onChange={(e) => setPostCaption(e.target.value)}
-                  placeholder="Breezy morning along the park footpath, negative splits on the return loop..."
-                  className="mt-1 w-full rounded-xl border border-[#D9D7CE] p-3 text-sm"
-                />
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="submit"
-                  disabled={posting}
-                  className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#172D27] px-5 text-xs font-bold text-[#9AE62E] disabled:opacity-60"
-                >
-                  <Send className="h-3.5 w-3.5" />
-                  {posting ? 'Publishing...' : 'Publish Daily Run'}
-                </button>
-              </div>
             </form>
           )}
 
-          {posts.length === 0 ? (
+          {posts.filter((p) => {
+            if (p.visibility !== 'friends') return true;
+            if (!userId) return false;
+            if (p.authorUid === userId) return true;
+            return acceptedFriends.some((f) => f.fromUid === p.authorUid || f.toUid === p.authorUid);
+          }).length === 0 ? (
             <div className="rounded-2xl border border-[#E5E3DC] bg-white p-8 text-center">
               <p className="font-display text-base font-bold text-[#141F1B]">No daily runs posted yet</p>
               <p className="mx-auto mt-1 max-w-md text-xs text-[#5B6B64]">
@@ -1969,7 +2170,14 @@ export const SocialView: React.FC<SocialViewProps> = ({
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              {posts.map((post) => {
+              {posts
+                .filter((p) => {
+                  if (p.visibility !== 'friends') return true;
+                  if (!userId) return false;
+                  if (p.authorUid === userId) return true;
+                  return acceptedFriends.some((f) => f.fromUid === p.authorUid || f.toUid === p.authorUid);
+                })
+                .map((post) => {
                 const isOwn = post.authorUid === userId;
                 const liked = likedPostIds.has(post.id);
                 const postMeta = getWorkoutMeta(post.workoutType);
@@ -2013,11 +2221,55 @@ export const SocialView: React.FC<SocialViewProps> = ({
                               {post.moodTag}
                             </span>
                           )}
+                          {(post.shoeBrand || post.shoeName) && (
+                            <span className="inline-flex items-center gap-1 rounded-lg bg-[#F6F5F0] border border-[#E5E3DC] px-2 py-1 text-[10px] font-bold text-[#172D27]">
+                              <Footprints className="h-3 w-3 text-[#30483E]" />
+                              {[post.shoeBrand, post.shoeName].filter(Boolean).join(' ')}
+                            </span>
+                          )}
                         </div>
                       </div>
 
+                      {(() => {
+                        const pts = post.encodedPolyline ? decodePolyline(post.encodedPolyline) : [];
+                        if (pts.length >= 2) {
+                          const mapRoute: GeneratedRouteCandidate = {
+                            id: `post-map-${post.id}`,
+                            workoutType: postMeta.id,
+                            label: postMeta.label,
+                            name: post.runTitle,
+                            routeType: 'circular',
+                            distanceMeters: Math.round(post.distanceKm * 1000),
+                            targetDistanceMeters: Math.round(post.distanceKm * 1000),
+                            durationSec: post.durationSec,
+                            elevationGainMeters: post.elevationGainMeters ?? null,
+                            start: { name: post.startName, ...pts[0] },
+                            end: { name: post.startName, ...pts[pts.length - 1] },
+                            encodedPolyline: post.encodedPolyline || '',
+                            path: pts,
+                            steps: [],
+                            kmMarkers: [],
+                            characteristics: [],
+                            surfaceSummary: '',
+                            preferences: [],
+                            difficulty: 'moderate',
+                            toleranceDiffPct: 0,
+                          };
+                          return (
+                            <div className="overflow-hidden rounded-xl border border-[#E5E3DC]">
+                              <TricityMap
+                                routes={[mapRoute]}
+                                selectedRouteId={mapRoute.id}
+                                preferredUnit={preferredUnit}
+                                heightClass="h-[200px]"
+                              />
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+
                       <div className="flex items-center gap-3 rounded-xl bg-[#F6F5F0] p-3">
-                        <MiniPolylineArt encodedPolyline={post.encodedPolyline} sizeClass="h-16 w-16" />
                         <div className="min-w-0 flex-1">
                           <h3 className="truncate font-display text-sm font-bold text-[#141F1B]">
                             {post.runTitle}
@@ -2060,6 +2312,29 @@ export const SocialView: React.FC<SocialViewProps> = ({
                           </div>
                         </div>
                       </div>
+
+                      {post.photos && post.photos.length > 0 && (
+                        <div
+                          className={`grid gap-2 ${
+                            post.photos.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
+                          }`}
+                        >
+                          {post.photos.map((photoSrc, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => setLightboxPostPhoto(photoSrc)}
+                              className="group aspect-[4/3] overflow-hidden rounded-xl border border-[#E5E3DC] bg-[#F6F5F0]"
+                            >
+                              <img
+                                src={photoSrc}
+                                alt={`${post.runTitle} photo ${idx + 1}`}
+                                className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      )}
 
                       <p className="text-xs leading-relaxed text-[#141F1B]">{post.caption}</p>
                     </div>
@@ -3493,6 +3768,28 @@ export const SocialView: React.FC<SocialViewProps> = ({
           </div>
         );
       })()}
+
+      {lightboxPostPhoto && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+          onClick={() => setLightboxPostPhoto(null)}
+        >
+          <button
+            type="button"
+            aria-label="Close photo"
+            onClick={() => setLightboxPostPhoto(null)}
+            className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white hover:bg-white/25"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img
+            src={lightboxPostPhoto}
+            alt="Full-size workout photo"
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[88dvh] max-w-[92vw] rounded-2xl object-contain shadow-2xl"
+          />
+        </div>
+      )}
     </div>
   );
 };

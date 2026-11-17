@@ -26,6 +26,7 @@ import { formatDistance, formatDuration } from '../lib/geo';
 import { CHALLENGES } from '../services/challengesService';
 import { recommendAlphabetKm, RUN_ART_TEMPLATES, sanitizeAlphabetInput } from '../services/runArtService';
 import { WorkoutIcon, WorkoutSelector } from '../components/WorkoutIcon';
+import { HomeWeatherCard } from '../components/HomeWeatherCard';
 import type {
   AppTab,
   LiveBeaconDoc,
@@ -177,6 +178,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   return (
     <div className="space-y-8">
+      <HomeWeatherCard activeCity={activeCity} />
+
       {/* Hero & Unified Quick Route Generator */}
       <section className="relative overflow-hidden rounded-3xl bg-[#172D27] text-white shadow-sm">
         <div className="absolute inset-0">

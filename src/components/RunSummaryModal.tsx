@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Award, Check, CloudOff, Download, Film, Home, Loader2, Plus, RefreshCw, Share2, Sparkles, Trash2 } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Award, Camera, Check, CloudOff, Download, Film, Footprints, Home, ImagePlus, Loader2, Plus, RefreshCw, Share2, Sparkles, Trash2, X } from 'lucide-react';
+import { MAX_RUN_PHOTOS, processRunPhotoFile } from '../lib/avatarUpload';
 import {
   estimateCaloriesKcal,
   formatSpeed,
@@ -30,11 +31,13 @@ import type {
   ElevationProfilePoint,
   GeneratedRouteCandidate,
   RunActivityDoc,
+  RunningShoeItem,
 } from '../types/run';
 import {
   ElevationProfileCard,
   type ElevationFetchStatus,
 } from './ElevationProfileCard';
+import { HydrationLossCard } from './HydrationLossCard';
 import { RunVideoModal } from './RunVideoModal';
 import { ShareCardModal } from './ShareCardModal';
 import { TricityMap } from './TricityMap';
@@ -48,10 +51,17 @@ interface RunSummaryModalProps {
   elevationProfile?: ElevationProfilePoint[];
   previousRuns: RunActivityDoc[];
   preferredUnit: 'km' | 'mi';
+  savedShoes?: RunningShoeItem[];
   isAuthenticated: boolean;
   saveStatus: AutoSaveStatus;
   saveError?: string | null;
   onRetrySync: () => Promise<void>;
+  onSaveJournal?: (
+    notes: string,
+    photos: string[],
+    shoeBrand?: string,
+    shoeName?: string
+  ) => Promise<void>;
   onDiscardRun: () => Promise<void>;
   onPostDailyRun?: () => void;
   onAddStory?: () => void;
@@ -65,10 +75,12 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
   elevationProfile,
   previousRuns,
   preferredUnit,
+  savedShoes = [],
   isAuthenticated,
   saveStatus,
   saveError,
   onRetrySync,
+  onSaveJournal,
   onDiscardRun,
   onPostDailyRun,
   onAddStory,
@@ -82,6 +94,74 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
   const [shareModalCard, setShareModalCard] = useState<PreparedShareCard | null>(null);
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const primaryShoe = savedShoes.find((s) => s.isPrimary) || savedShoes[0];
+  const [notes, setNotes] = useState(summary.notes || '');
+  const [shoeBrand, setShoeBrand] = useState(summary.shoeBrand || primaryShoe?.brand || '');
+  const [shoeName, setShoeName] = useState(summary.shoeName || primaryShoe?.name || '');
+  const [photos, setPhotos] = useState<string[]>(summary.photos || []);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [savingJournal, setSavingJournal] = useState(false);
+  const [journalSaved, setJournalSaved] = useState(false);
+  const [journalError, setJournalError] = useState<string | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
+
+  const persistJournal = async (
+    nextNotes: string,
+    nextPhotos: string[],
+    nextShoeBrand = shoeBrand,
+    nextShoeName = shoeName
+  ) => {
+    if (!onSaveJournal) return;
+    setSavingJournal(true);
+    setJournalError(null);
+    try {
+      await onSaveJournal(nextNotes, nextPhotos, nextShoeBrand, nextShoeName);
+      setJournalSaved(true);
+      setTimeout(() => setJournalSaved(false), 3000);
+    } catch (err) {
+      setJournalError(err instanceof Error ? err.message : 'Unable to save notes and photos.');
+    } finally {
+      setSavingJournal(false);
+    }
+  };
+
+  const handlePhotoFilesSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (files.length === 0) return;
+
+    const remainingSlots = MAX_RUN_PHOTOS - photos.length;
+    if (remainingSlots <= 0) {
+      setJournalError(`You can attach up to ${MAX_RUN_PHOTOS} photos per activity.`);
+      return;
+    }
+
+    setUploadingPhoto(true);
+    setJournalError(null);
+    const added: string[] = [];
+    try {
+      for (const file of files.slice(0, remainingSlots)) {
+        const compressed = await processRunPhotoFile(file);
+        added.push(compressed);
+      }
+      if (added.length > 0) {
+        const nextPhotos = [...photos, ...added].slice(0, MAX_RUN_PHOTOS);
+        setPhotos(nextPhotos);
+        await persistJournal(notes, nextPhotos);
+      }
+    } catch (err) {
+      setJournalError(err instanceof Error ? err.message : 'Could not process selected photo.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleRemovePhoto = async (index: number) => {
+    const nextPhotos = photos.filter((_, idx) => idx !== index);
+    setPhotos(nextPhotos);
+    await persistJournal(notes, nextPhotos);
+  };
 
   const workoutType = normalizeWorkoutType(summary.workoutType);
   const workoutMeta = getWorkoutMeta(workoutType);
@@ -305,6 +385,188 @@ export const RunSummaryModal: React.FC<RunSummaryModalProps> = ({
           status={elevationStatus}
           unit={preferredUnit}
         />
+
+        <HydrationLossCard
+          durationSec={summary.durationSec}
+          caloriesKcal={caloriesKcal}
+          avgPaceSecPerKm={summary.avgPaceSecPerKm}
+          workoutType={workoutType}
+          lat={decodedPath[0]?.lat}
+          lng={decodedPath[0]?.lng}
+        />
+
+        {/* Post-Run Description & Photos */}
+        <div className="rounded-2xl border border-[#E5E3DC] bg-white p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="flex items-center gap-2 font-display text-base font-bold text-[#141F1B]">
+                <Camera className="h-4 w-4 text-[#30483E]" />
+                {workoutMeta.pastNoun} Description &amp; Photos
+              </h3>
+              <p className="text-xs text-[#5B6B64]">
+                Add how it felt and upload up to {MAX_RUN_PHOTOS} photos (sunrise, sunset, trail views)
+              </p>
+            </div>
+            {journalSaved && (
+              <span className="inline-flex items-center gap-1 rounded-lg bg-[#EBF5EE] px-2.5 py-1 text-xs font-semibold text-[#172D27]">
+                <Check className="h-3.5 w-3.5" />
+                Saved
+              </span>
+            )}
+          </div>
+
+          <div>
+            <textarea
+              rows={3}
+              maxLength={500}
+              value={notes}
+              onChange={(e) => {
+                setNotes(e.target.value);
+                if (journalSaved) setJournalSaved(false);
+              }}
+              placeholder={`How did your ${workoutMeta.pastNoun.toLowerCase()} feel? Describe the sunrise or sunset view, weather, or highlights...`}
+              className="w-full rounded-xl border border-[#D9D7CE] bg-[#F6F5F0]/50 px-3.5 py-2.5 text-sm text-[#141F1B] placeholder:text-[#5B6B64]/70 focus:border-[#172D27] focus:bg-white focus:outline-none"
+            />
+            <div className="mt-1 flex items-center justify-between text-[11px] text-[#5B6B64]">
+              <span>Saved to your activity log</span>
+              <span className="font-mono tabular-nums">{notes.length}/500</span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handlePhotoFilesSelected}
+              className="hidden"
+            />
+
+            {photos.length > 0 && (
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                {photos.map((photoSrc, idx) => (
+                  <div
+                    key={idx}
+                    className="group relative aspect-[4/3] overflow-hidden rounded-xl border border-[#E5E3DC] bg-[#F6F5F0]"
+                  >
+                    <img
+                      src={photoSrc}
+                      alt={`${workoutMeta.pastNoun} view ${idx + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      aria-label={`Remove photo ${idx + 1}`}
+                      onClick={() => void handleRemovePhoto(idx)}
+                      className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white transition hover:bg-red-600"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {journalError && (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                {journalError}
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                disabled={uploadingPhoto || photos.length >= MAX_RUN_PHOTOS}
+                onClick={() => photoInputRef.current?.click()}
+                className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-[#D9D7CE] bg-white px-4 text-xs font-semibold text-[#141F1B] hover:bg-[#F6F5F0] disabled:opacity-50"
+              >
+                {uploadingPhoto ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-[#172D27]" />
+                ) : (
+                  <ImagePlus className="h-4 w-4 text-[#30483E]" />
+                )}
+                {uploadingPhoto
+                  ? 'Processing photo...'
+                  : photos.length >= MAX_RUN_PHOTOS
+                  ? `Max ${MAX_RUN_PHOTOS} Photos Added`
+                  : `Upload Photos (${photos.length}/${MAX_RUN_PHOTOS})`}
+              </button>
+
+              {onSaveJournal && (
+                <button
+                  type="button"
+                  disabled={savingJournal || uploadingPhoto}
+                  onClick={() => void persistJournal(notes, photos, shoeBrand, shoeName)}
+                  className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-[#172D27] px-4 text-xs font-semibold text-[#9AE62E] disabled:opacity-60"
+                >
+                  {savingJournal ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" />
+                  )}
+                  {savingJournal ? 'Saving...' : 'Save Description'}
+                </button>
+              )}
+            </div>
+
+            {/* Running Shoe Brand & Model */}
+            <div className="border-t border-[#ECEAE2] pt-3 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#5B6B64]">
+                  <Footprints className="h-3.5 w-3.5 text-[#172D27]" />
+                  Running Shoe Used (optional)
+                </span>
+              </div>
+
+              {savedShoes.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {savedShoes.map((shoe) => {
+                    const selected =
+                      shoeName.trim().toLowerCase() === shoe.name.trim().toLowerCase() &&
+                      shoeBrand.trim().toLowerCase() === (shoe.brand || '').trim().toLowerCase();
+                    return (
+                      <button
+                        key={shoe.id}
+                        type="button"
+                        onClick={() => {
+                          setShoeBrand(shoe.brand || '');
+                          setShoeName(shoe.name);
+                        }}
+                        className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
+                          selected
+                            ? 'border-[#172D27] bg-[#172D27] text-[#9AE62E]'
+                            : 'border-[#D9D7CE] bg-[#F6F5F0] text-[#141F1B] hover:border-[#30483E]'
+                        }`}
+                      >
+                        {shoe.brand ? `${shoe.brand} ${shoe.name}` : shoe.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <input
+                  type="text"
+                  maxLength={40}
+                  value={shoeBrand}
+                  onChange={(e) => setShoeBrand(e.target.value)}
+                  placeholder="Shoe Brand (e.g. Nike)"
+                  className="min-h-[38px] rounded-xl border border-[#D9D7CE] bg-[#F6F5F0]/60 px-3 text-xs text-[#141F1B] focus:border-[#172D27] focus:bg-white focus:outline-none"
+                />
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={shoeName}
+                  onChange={(e) => setShoeName(e.target.value)}
+                  placeholder="Shoe Model (e.g. Pegasus 41)"
+                  className="min-h-[38px] rounded-xl border border-[#D9D7CE] bg-[#F6F5F0]/60 px-3 text-xs text-[#141F1B] focus:border-[#172D27] focus:bg-white focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
 
         {previewRoute && (
           <div className="space-y-2">

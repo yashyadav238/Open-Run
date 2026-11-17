@@ -32,7 +32,15 @@ export const ShareCardModal: React.FC<ShareCardModalProps> = ({ card, onClose })
     const hasRunMetrics =
       card.sourceInput.splits !== undefined || card.sourceInput.durationSec !== undefined;
     if (hasRunMetrics) return SHARE_CARD_STYLES;
-    return SHARE_CARD_STYLES.filter((s) => s.id === 'route' || s.id === 'adidas_poster');
+    return SHARE_CARD_STYLES.filter(
+      (s) =>
+        s.id === 'route' ||
+        s.id === 'midnight_neon' ||
+        s.id === 'topo_paper' ||
+        s.id === 'sunset_glow' ||
+        s.id === 'blueprint' ||
+        s.id === 'adidas_poster'
+    );
   }, [card]);
 
   const activeCard = useMemo(() => {
@@ -40,7 +48,10 @@ export const ShareCardModal: React.FC<ShareCardModalProps> = ({ card, onClose })
     if (!card.sourceInput || selectedStyle === card.style) {
       return card;
     }
-    const baseName = card.filename.replace(/-(splits|adidas_poster|pace_chart)\.png$/i, '.png');
+    const baseName = card.filename.replace(
+      /-(splits|adidas_poster|pace_chart|midnight_neon|topo_paper|sunset_glow|blueprint)\.png$/i,
+      '.png'
+    );
     return (
       prepareShareCardSync({
         filename: baseName,

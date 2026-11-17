@@ -28,6 +28,10 @@ service cloud.firestore {
       return url is string && url.size() <= 80000
         && (url == '' || url.matches('^https?://.*') || url.matches('^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$'));
     }
+    function isValidRunPhoto(val) {
+      return val is string && val.size() <= 120000
+        && val.matches('^data:image/(jpeg|webp);base64,[A-Za-z0-9+/=]+$');
+    }
     function isValidWorkoutType(w) {
       return w is string && w.size() <= 20 && w in ['running', 'cycling', 'walking', 'hiking', 'trail_run'];
     }
@@ -36,7 +40,7 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'displayName', 'preferredUnit', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly([
           'uid', 'username', 'displayName', 'photoURL', 'preferredUnit', 'preferredWorkout', 'preferredTerrain',
-          'city', 'cityLat', 'cityLng', 'bio', 'bioTags', 'totalDistanceKm', 'totalRuns',
+          'city', 'cityLat', 'cityLng', 'bio', 'bioTags', 'isPrivate', 'shoes', 'totalDistanceKm', 'totalRuns',
           'totalDurationSec', 'longestRunKm', 'bestPaceSecPerKm', 'currentStreakDays',
           'createdAt', 'updatedAt'
         ])
@@ -52,6 +56,8 @@ service cloud.firestore {
         && (!('cityLng' in data) || (data.cityLng is number && data.cityLng >= -180 && data.cityLng <= 180))
         && (!('bio' in data) || (data.bio is string && data.bio.size() <= 280))
         && (!('bioTags' in data) || (data.bioTags is list && data.bioTags.size() <= 8 && (data.bioTags.size() == 0 || (data.bioTags[0] is string && data.bioTags[0].size() >= 1 && data.bioTags[0].size() <= 32))))
+        && (!('isPrivate' in data) || data.isPrivate is bool)
+        && (!('shoes' in data) || (data.shoes is list && data.shoes.size() <= 15))
         && (!('totalDistanceKm' in data) || (data.totalDistanceKm is number && data.totalDistanceKm >= 0))
         && (!('totalRuns' in data) || (data.totalRuns is number && data.totalRuns >= 0))
         && (!('totalDurationSec' in data) || (data.totalDurationSec is number && data.totalDurationSec >= 0))
@@ -112,7 +118,7 @@ service cloud.firestore {
           'userId', 'routeId', 'routeName', 'workoutType', 'routeType', 'distanceMeters',
           'durationSec', 'avgPaceSecPerKm', 'bestPaceSecPerKm', 'avgSpeedKmh', 'caloriesKcal',
           'elevationGainMeters', 'elevationLossMeters', 'minElevationMeters', 'maxElevationMeters',
-          'splits', 'encodedPolyline', 'startName',
+          'splits', 'encodedPolyline', 'startName', 'notes', 'photos', 'shoeBrand', 'shoeName',
           'sampleCount', 'status', 'startedAt', 'finishedAt', 'createdAt'
         ])
         && data.userId == request.auth.uid
@@ -130,6 +136,17 @@ service cloud.firestore {
         && (!('routeId' in data) || (data.routeId is string && data.routeId.size() <= 128))
         && (!('encodedPolyline' in data) || (data.encodedPolyline is string && data.encodedPolyline.size() <= 25000))
         && (!('startName' in data) || (data.startName is string && data.startName.size() <= 140))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+        && (!('shoeBrand' in data) || (data.shoeBrand is string && data.shoeBrand.size() <= 40))
+        && (!('shoeName' in data) || (data.shoeName is string && data.shoeName.size() <= 80))
+        && (!('photos' in data) || (
+          data.photos is list
+          && data.photos.size() <= 4
+          && (data.photos.size() == 0 || isValidRunPhoto(data.photos[0]))
+          && (data.photos.size() <= 1 || isValidRunPhoto(data.photos[1]))
+          && (data.photos.size() <= 2 || isValidRunPhoto(data.photos[2]))
+          && (data.photos.size() <= 3 || isValidRunPhoto(data.photos[3]))
+        ))
         && (!('splits' in data) || (data.splits is list && data.splits.size() <= 100));
     }
 
@@ -226,7 +243,7 @@ service cloud.firestore {
     function isValidRunnerDirectoryCard(data) {
       return data.keys().hasAll(['uid', 'displayName', 'updatedAt'])
         && data.keys().hasOnly([
-          'uid', 'username', 'displayName', 'photoURL', 'city', 'bio', 'bioTags',
+          'uid', 'username', 'displayName', 'photoURL', 'city', 'bio', 'bioTags', 'isPrivate',
           'preferredWorkout', 'totalDistanceKm', 'totalRuns', 'updatedAt'
         ])
         && data.uid == request.auth.uid
@@ -236,6 +253,7 @@ service cloud.firestore {
         && (!('city' in data) || (data.city is string && data.city.size() <= 80))
         && (!('bio' in data) || (data.bio is string && data.bio.size() <= 280))
         && (!('bioTags' in data) || (data.bioTags is list && data.bioTags.size() <= 8 && (data.bioTags.size() == 0 || (data.bioTags[0] is string && data.bioTags[0].size() >= 1 && data.bioTags[0].size() <= 32))))
+        && (!('isPrivate' in data) || data.isPrivate is bool)
         && (!('preferredWorkout' in data) || isValidWorkoutType(data.preferredWorkout))
         && (!('totalDistanceKm' in data) || (data.totalDistanceKm is number && data.totalDistanceKm >= 0))
         && (!('totalRuns' in data) || (data.totalRuns is number && data.totalRuns >= 0));
@@ -277,6 +295,21 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/friend_requests/$(threadId))
         && get(/databases/$(database)/documents/friend_requests/$(threadId)).data.status == 'accepted'
         && request.auth.uid in get(/databases/$(database)/documents/friend_requests/$(threadId)).data.participantUids;
+    }
+
+    function isPublicRecipient(threadId, participantUids) {
+      return participantUids.size() == 2
+        && threadId == participantUids[0] + '__' + participantUids[1]
+        && request.auth.uid in participantUids
+        && (
+          (participantUids[0] == request.auth.uid
+            && exists(/databases/$(database)/documents/runner_directory/$(participantUids[1]))
+            && get(/databases/$(database)/documents/runner_directory/$(participantUids[1])).data.get('isPrivate', false) != true)
+          ||
+          (participantUids[1] == request.auth.uid
+            && exists(/databases/$(database)/documents/runner_directory/$(participantUids[0]))
+            && get(/databases/$(database)/documents/runner_directory/$(participantUids[0])).data.get('isPrivate', false) != true)
+        );
     }
 
     function isValidDmThread(data, threadId) {
@@ -351,7 +384,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'authorUid', 'authorName', 'authorPhotoUrl', 'workoutType', 'caption',
           'runTitle', 'distanceKm', 'durationSec', 'avgPaceSecPerKm', 'elevationGainMeters',
-          'startName', 'encodedPolyline', 'moodTag', 'likeCount',
+          'startName', 'encodedPolyline', 'photos', 'shoeBrand', 'shoeName', 'moodTag', 'likeCount',
           'visibility', 'createdAt', 'updatedAt'
         ])
         && data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128
@@ -366,9 +399,19 @@ service cloud.firestore {
         && (!('elevationGainMeters' in data) || (data.elevationGainMeters is number && data.elevationGainMeters >= 0 && data.elevationGainMeters <= 25000))
         && data.startName is string && data.startName.size() >= 1 && data.startName.size() <= 140
         && (!('encodedPolyline' in data) || (data.encodedPolyline is string && data.encodedPolyline.size() <= 25000))
+        && (!('shoeBrand' in data) || (data.shoeBrand is string && data.shoeBrand.size() <= 40))
+        && (!('shoeName' in data) || (data.shoeName is string && data.shoeName.size() <= 80))
+        && (!('photos' in data) || (
+          data.photos is list
+          && data.photos.size() <= 4
+          && (data.photos.size() == 0 || isValidRunPhoto(data.photos[0]))
+          && (data.photos.size() <= 1 || isValidRunPhoto(data.photos[1]))
+          && (data.photos.size() <= 2 || isValidRunPhoto(data.photos[2]))
+          && (data.photos.size() <= 3 || isValidRunPhoto(data.photos[3]))
+        ))
         && (!('moodTag' in data) || (data.moodTag is string && data.moodTag.size() <= 30))
         && data.likeCount is number && data.likeCount >= 0
-        && data.visibility == 'public';
+        && data.visibility in ['public', 'friends'];
     }
 
     function isValidRunStory(data) {
@@ -425,6 +468,35 @@ service cloud.firestore {
         && data.expiresAtMs is number && data.expiresAtMs > 0;
     }
 
+    function isValidRunClub(data) {
+      return data.keys().hasAll([
+          'name', 'description', 'city', 'tags',
+          'ownerUid', 'ownerName', 'memberCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'name', 'description', 'city', 'tags',
+          'ownerUid', 'ownerName', 'memberCount', 'createdAt', 'updatedAt'
+        ])
+        && data.name is string && data.name.size() >= 3 && data.name.size() <= 80
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 400
+        && data.city is string && data.city.size() >= 2 && data.city.size() <= 80
+        && data.tags is list && data.tags.size() <= 8
+        && (data.tags.size() == 0 || (data.tags[0] is string && data.tags[0].size() >= 1 && data.tags[0].size() <= 32))
+        && data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 80
+        && data.memberCount is number && data.memberCount >= 1 && data.memberCount <= 10000;
+    }
+
+    function isValidClubMember(data, clubId, memberUid) {
+      return data.keys().hasAll(['clubId', 'userId', 'memberName', 'role', 'joinedAt'])
+        && data.keys().hasOnly(['clubId', 'userId', 'memberName', 'role', 'joinedAt'])
+        && data.clubId == clubId
+        && data.userId == memberUid
+        && data.userId == request.auth.uid
+        && data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 80
+        && data.role in ['owner', 'member'];
+    }
+
     match /users/{userId} {
       allow get: if isValidId(userId) && isOwner(userId);
       allow create: if isValidId(userId) && isOwner(userId) && isValidUserProfile(incoming())
@@ -435,7 +507,7 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'username', 'displayName', 'photoURL', 'preferredUnit', 'preferredWorkout', 'preferredTerrain',
-          'city', 'cityLat', 'cityLng', 'bio', 'bioTags', 'totalDistanceKm', 'totalRuns',
+          'city', 'cityLat', 'cityLng', 'bio', 'bioTags', 'isPrivate', 'shoes', 'totalDistanceKm', 'totalRuns',
           'totalDurationSec', 'longestRunKm', 'bestPaceSecPerKm', 'currentStreakDays', 'updatedAt'
         ]);
       allow delete: if isValidId(userId) && isOwner(userId);
@@ -467,6 +539,11 @@ service cloud.firestore {
       allow list: if isSignedIn() && existing().userId == request.auth.uid;
       allow create: if isValidId(runId) && isVerifiedUser() && isValidRunActivity(incoming())
         && incoming().createdAt == request.time;
+      allow update: if isValidId(runId) && isVerifiedUser() && existing().userId == request.auth.uid
+        && isValidRunActivity(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'photos', 'shoeBrand', 'shoeName']);
       allow delete: if isValidId(runId) && isSignedIn() && existing().userId == request.auth.uid;
 
       match /track_batches/{batchId} {
@@ -622,7 +699,7 @@ service cloud.firestore {
 
     match /friend_requests/{requestId} {
       allow get: if isValidId(requestId) && isSignedIn()
-        && request.auth.uid in existing().participantUids;
+        && (resource == null || request.auth.uid in existing().participantUids);
       allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
       allow create: if isValidId(requestId)
         && isVerifiedUser()
@@ -652,7 +729,7 @@ service cloud.firestore {
 
     match /dm_threads/{threadId} {
       allow get: if isValidId(threadId) && isSignedIn()
-        && request.auth.uid in existing().participantUids;
+        && (resource == null || request.auth.uid in existing().participantUids);
       allow list: if isSignedIn() && request.auth.uid in existing().participantUids;
       allow create: if isValidId(threadId)
         && isVerifiedUser()
@@ -660,8 +737,13 @@ service cloud.firestore {
         && incoming().lastSenderId == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
-        && isAcceptedFriendThread(threadId)
-        && incoming().participantUids == get(/databases/$(database)/documents/friend_requests/$(threadId)).data.participantUids;
+        && (
+          (
+            isAcceptedFriendThread(threadId)
+            && incoming().participantUids == get(/databases/$(database)/documents/friend_requests/$(threadId)).data.participantUids
+          )
+          || isPublicRecipient(threadId, incoming().participantUids)
+        );
       allow update: if isValidId(threadId)
         && isVerifiedUser()
         && isValidDmThread(incoming(), threadId)
@@ -674,13 +756,12 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'lastMessageText', 'lastMessageType', 'lastSenderId', 'updatedAt'
         ])
-        && isAcceptedFriendThread(threadId);
+        && (isAcceptedFriendThread(threadId) || isPublicRecipient(threadId, incoming().participantUids));
 
       match /messages/{messageId} {
         allow get: if isValidId(threadId) && isValidId(messageId) && isSignedIn()
           && request.auth.uid in existing().participantUids;
         allow list: if isSignedIn()
-          && existing().threadId == threadId
           && request.auth.uid in existing().participantUids;
         allow create: if isValidId(threadId)
           && isValidId(messageId)
@@ -690,8 +771,13 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && (incoming().messageType in ['text', 'location'] || incoming().inviteStatus == 'pending')
-          && isAcceptedFriendThread(threadId)
-          && incoming().participantUids == get(/databases/$(database)/documents/friend_requests/$(threadId)).data.participantUids
+          && (
+            (
+              isAcceptedFriendThread(threadId)
+              && incoming().participantUids == get(/databases/$(database)/documents/friend_requests/$(threadId)).data.participantUids
+            )
+            || isPublicRecipient(threadId, incoming().participantUids)
+          )
           && existsAfter(/databases/$(database)/documents/dm_threads/$(threadId))
           && getAfter(/databases/$(database)/documents/dm_threads/$(threadId)).data.lastSenderId == request.auth.uid;
         allow update: if isValidId(threadId)
@@ -721,15 +807,15 @@ service cloud.firestore {
 
     match /daily_posts/{postId} {
       allow get: if isValidId(postId)
-        && (existing().visibility == 'public' || (isSignedIn() && existing().authorUid == request.auth.uid));
+        && (existing().visibility == 'public' || (isSignedIn() && (existing().authorUid == request.auth.uid || existing().visibility == 'friends')));
       allow list: if existing().visibility == 'public'
-        || (isSignedIn() && existing().authorUid == request.auth.uid);
+        || (isSignedIn() && (existing().authorUid == request.auth.uid || existing().visibility == 'friends'));
       allow create: if isValidId(postId)
         && isVerifiedUser()
         && isValidDailyRunPost(incoming())
         && incoming().authorUid == request.auth.uid
         && incoming().likeCount == 0
-        && incoming().visibility == 'public'
+        && incoming().visibility in ['public', 'friends']
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(postId)
@@ -811,6 +897,81 @@ service cloud.firestore {
         && isValidLiveBeacon(incoming())
         && incoming().updatedAt == request.time;
       allow delete: if isValidId(userId) && isOwner(userId);
+    }
+
+    match /run_clubs/{clubId} {
+      allow get: if isValidId(clubId);
+      allow list: if existing().memberCount >= 1;
+      allow create: if isValidId(clubId)
+        && isVerifiedUser()
+        && isValidRunClub(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().memberCount == 1
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/run_clubs/$(clubId)/members/$(request.auth.uid));
+      allow update: if isValidId(clubId)
+        && isVerifiedUser()
+        && isValidRunClub(incoming())
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().memberCount == existing().memberCount
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'city', 'tags', 'updatedAt'])
+          )
+          ||
+          (
+            incoming().memberCount == existing().memberCount + 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
+            && !exists(/databases/$(database)/documents/run_clubs/$(clubId)/members/$(request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/run_clubs/$(clubId)/members/$(request.auth.uid))
+          )
+          ||
+          (
+            existing().memberCount > 1
+            && incoming().memberCount == existing().memberCount - 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
+            && exists(/databases/$(database)/documents/run_clubs/$(clubId)/members/$(request.auth.uid))
+            && !existsAfter(/databases/$(database)/documents/run_clubs/$(clubId)/members/$(request.auth.uid))
+          )
+        );
+      allow delete: if isValidId(clubId) && isSignedIn() && existing().ownerUid == request.auth.uid;
+
+      match /members/{memberUid} {
+        allow get: if isValidId(clubId) && isValidId(memberUid) && isSignedIn();
+        allow list: if isSignedIn() && existing().clubId == clubId;
+        allow create: if isValidId(clubId)
+          && isValidId(memberUid)
+          && isVerifiedUser()
+          && isOwner(memberUid)
+          && isValidClubMember(incoming(), clubId, memberUid)
+          && incoming().joinedAt == request.time
+          && (
+            (
+              !exists(/databases/$(database)/documents/run_clubs/$(clubId))
+              && incoming().role == 'owner'
+              && getAfter(/databases/$(database)/documents/run_clubs/$(clubId)).data.ownerUid == request.auth.uid
+              && getAfter(/databases/$(database)/documents/run_clubs/$(clubId)).data.memberCount == 1
+            )
+            ||
+            (
+              exists(/databases/$(database)/documents/run_clubs/$(clubId))
+              && incoming().role == 'member'
+              && getAfter(/databases/$(database)/documents/run_clubs/$(clubId)).data.memberCount
+                == get(/databases/$(database)/documents/run_clubs/$(clubId)).data.memberCount + 1
+            )
+          );
+        allow delete: if isValidId(clubId)
+          && isValidId(memberUid)
+          && isVerifiedUser()
+          && isOwner(memberUid)
+          && existing().role == 'member'
+          && getAfter(/databases/$(database)/documents/run_clubs/$(clubId)).data.memberCount
+            == get(/databases/$(database)/documents/run_clubs/$(clubId)).data.memberCount - 1;
+      }
     }
   }
 }

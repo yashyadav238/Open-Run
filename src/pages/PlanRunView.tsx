@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useMapsLibrary } from '@vis.gl/react-google-maps';
 import {
   AlertCircle,
+  ArrowRight,
   Bookmark,
   Check,
   Code2,
@@ -48,6 +49,7 @@ import {
   normalizeWorkoutType,
 } from '../data/workouts';
 import { douglasPeucker2D, formatDistance, formatDuration } from '../lib/geo';
+import { EXAMPLE_ROUTE_PROMPTS, parseRoutePrompt } from '../lib/routePromptParser';
 import { saveRouteToLibrary, saveRunArtDesign } from '../services/firestoreService';
 import {
   buildRouteCandidateFromPointPath,
@@ -201,6 +203,8 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
   const [artAnyStartEnd, setArtAnyStartEnd] = useState<boolean>(false);
   const [loopCount, setLoopCount] = useState<number>(1);
   const [nightMode, setNightMode] = useState<boolean>(false);
+  const [routePrompt, setRoutePrompt] = useState<string>('');
+  const [promptSummaryTags, setPromptSummaryTags] = useState<string[]>([]);
 
   // Map click point-to-point path & distance state
   const [measureOriginMode, setMeasureOriginMode] = useState<MeasureOriginMode>('start');
@@ -356,6 +360,7 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
     anyStartAnyEnd?: boolean;
     loops?: number;
     night?: boolean;
+    overridePreferences?: RoutePreference[];
   }) => {
     const activeSport = normalizeWorkoutType(params.activeWorkout ?? workoutType);
     setGenerating(true);
@@ -365,9 +370,10 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
 
     const activeLoops = params.loops ?? loopCount;
     const isNight = params.night ?? nightMode;
+    const basePrefs = params.overridePreferences ?? preferences;
     const effectivePrefs: RoutePreference[] = isNight
-      ? Array.from(new Set([...preferences.filter((p) => p !== 'parks_greenery'), 'well_lit']))
-      : preferences.filter((p) => p !== 'well_lit');
+      ? Array.from(new Set([...basePrefs.filter((p) => p !== 'parks_greenery'), 'well_lit']))
+      : basePrefs.filter((p) => p !== 'well_lit');
 
     try {
       const provider = createPedestrianRoutingProvider(routesLib);
@@ -700,6 +706,81 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
     });
   };
 
+  const handlePromptGenerate = (overrideText?: string) => {
+    const text = (overrideText ?? routePrompt).trim();
+    if (!text) return;
+    if (overrideText !== undefined) {
+      setRoutePrompt(overrideText);
+    }
+
+    const parsed = parseRoutePrompt(text, {
+      workoutType,
+      distanceKm,
+      preferences,
+    });
+
+    const parsedMeta = getWorkoutMeta(parsed.workoutType);
+    const clampedKm = Math.min(
+      parsedMeta.maxPlanKm,
+      Math.max(0.5, parsed.distanceKm)
+    );
+
+    setWorkoutType(parsed.workoutType);
+    onWorkoutChange?.(parsed.workoutType);
+    setMode(parsed.mode);
+    setDistanceKm(clampedKm);
+    setCustomKm('');
+    setRouteType(parsed.routeType);
+    setLoopCount(parsed.loopCount);
+    setNightMode(parsed.nightMode);
+    setPreferences(parsed.preferences);
+    setPromptSummaryTags(parsed.summaryTags);
+
+    let activeTpl = selectedTemplate;
+    let useAnyStart = artAnyStartEnd;
+
+    if (parsed.mode === 'run_art') {
+      if (parsed.shapeId === 'alphabet' && parsed.alphabetText) {
+        setAlphabetText(parsed.alphabetText);
+        const built = buildAlphabetRunArtVertices(parsed.alphabetText);
+        activeTpl = {
+          id: 'alphabet',
+          name: `Letters "${built.text}"`,
+          subtitle: 'Single-stroke A–Z / 0–9 letters joined cleanly along local street blocks',
+          recommendedKm: clampedKm,
+          normalizedVertices: built.vertices,
+        };
+        setSelectedTemplate(activeTpl);
+        setArtAnyStartEnd(true);
+        useAnyStart = true;
+      } else if (parsed.shapeId) {
+        const found = RUN_ART_TEMPLATES.find((t) => t.id === parsed.shapeId);
+        if (found) {
+          activeTpl = found;
+          setSelectedTemplate(found);
+        }
+      }
+    }
+
+    const nextSeed = seedOffset + 1;
+    setSeedOffset(nextSeed);
+    runGeneration({
+      activeMode: parsed.mode,
+      activeWorkout: parsed.workoutType,
+      targetKm: clampedKm,
+      type: parsed.routeType,
+      tpl: activeTpl,
+      size: artSize,
+      origin: startLoc,
+      dest: endLoc,
+      seed: nextSeed,
+      anyStartAnyEnd: useAnyStart,
+      loops: parsed.loopCount,
+      night: parsed.nightMode,
+      overridePreferences: parsed.preferences,
+    });
+  };
+
   return (
     <div className="grid gap-6 lg:grid-cols-12">
       {/* Left Unified Planner Controls */}
@@ -736,6 +817,71 @@ export const PlanRunView: React.FC<PlanRunViewProps> = ({
               </button>
             )}
           </div>
+
+          {/* Prompt-to-Route Natural Language Generator */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handlePromptGenerate();
+            }}
+            className="mt-3.5 rounded-xl border border-[#D9E2DC] bg-[#F7F9F7] p-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <label
+                htmlFor="route-prompt-input"
+                className="text-[11px] font-bold uppercase tracking-wider text-[#172D27]"
+              >
+                Prompt-to-Route
+              </label>
+              <span className="text-[10px] font-medium text-[#5B6B64]">
+                Describe distance, vibe, or shape
+              </span>
+            </div>
+            <div className="mt-1.5 flex gap-1.5">
+              <input
+                id="route-prompt-input"
+                type="text"
+                value={routePrompt}
+                onChange={(e) => setRoutePrompt(e.target.value)}
+                placeholder='e.g. "10km shaded park loop" or "5k heart run art"'
+                className="min-w-0 flex-1 rounded-lg border border-[#D9D7CE] bg-white px-3 py-2 text-xs text-[#141F1B] placeholder:text-[#8A9791] focus:border-[#172D27] focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={generating || !routePrompt.trim()}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#172D27] px-3 py-2 text-xs font-bold text-[#9AE62E] transition hover:bg-[#213E36] disabled:opacity-50"
+              >
+                Go
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {EXAMPLE_ROUTE_PROMPTS.slice(0, 4).map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  disabled={generating}
+                  onClick={() => handlePromptGenerate(example)}
+                  className="rounded-md border border-[#E2E4DE] bg-white px-2 py-0.5 text-[10px] font-medium text-[#30483E] transition hover:border-[#172D27] hover:bg-[#EFF5EF] disabled:opacity-50"
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+            {promptSummaryTags.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-[#E5E8E3] pt-2">
+                <span className="text-[10px] font-semibold text-[#5B6B64]">Applied:</span>
+                {promptSummaryTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded bg-[#172D27] px-1.5 py-0.5 text-[10px] font-semibold text-[#9AE62E]"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </form>
 
           {/* Sport / Workout Selector */}
           <div className="mt-3.5">

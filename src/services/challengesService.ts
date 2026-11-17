@@ -234,4 +234,164 @@ export const ACHIEVEMENTS: AchievementDefinition[] = [
     subtitle: 'Logged 2+ different workout types',
     unlocked: (runs) => new Set(runs.map((r) => normalizeWorkoutType(r.workoutType))).size >= 2,
   },
+  {
+    key: 'single_5k_club',
+    title: '5K Club',
+    subtitle: 'Completed 5+ km in a single session',
+    unlocked: (runs) => runs.some((r) => r.distanceMeters >= 5000),
+  },
+  {
+    key: 'single_10k_club',
+    title: '10K Finisher',
+    subtitle: 'Completed 10+ km in a single session',
+    unlocked: (runs) => runs.some((r) => r.distanceMeters >= 10000),
+  },
+  {
+    key: 'club_21k',
+    title: '21K Club',
+    subtitle: 'Half Marathon — 21.1+ km in a single session',
+    unlocked: (runs) => runs.some((r) => r.distanceMeters >= 21100),
+  },
+  {
+    key: 'club_42k',
+    title: '42K Marathon Club',
+    subtitle: 'Full Marathon — 42.2+ km in a single session',
+    unlocked: (runs) => runs.some((r) => r.distanceMeters >= 42200),
+  },
+  {
+    key: 'club_250',
+    title: '250 KM Club',
+    subtitle: '250 cumulative km tracked',
+    unlocked: (runs) => runs.reduce((s, r) => s + r.distanceMeters / 1000, 0) >= 250,
+  },
+  {
+    key: 'club_500',
+    title: '500 KM Legend',
+    subtitle: '500 cumulative km tracked',
+    unlocked: (runs) => runs.reduce((s, r) => s + r.distanceMeters / 1000, 0) >= 500,
+  },
+  {
+    key: 'early_bird',
+    title: 'Early Bird',
+    subtitle: 'Finished a workout before 7:00 AM',
+    unlocked: (runs) =>
+      runs.some((r) => {
+        const d = new Date(r.finishedAt);
+        return !Number.isNaN(d.getTime()) && d.getHours() < 7;
+      }),
+  },
+  {
+    key: 'night_owl',
+    title: 'Night Owl',
+    subtitle: 'Finished a workout at or after 8:00 PM',
+    unlocked: (runs) =>
+      runs.some((r) => {
+        const d = new Date(r.finishedAt);
+        return !Number.isNaN(d.getTime()) && d.getHours() >= 20;
+      }),
+  },
+  {
+    key: 'hill_climber',
+    title: 'Hill Climber',
+    subtitle: 'Climbed 500+ m total elevation gain',
+    unlocked: (runs) =>
+      runs.reduce((s, r) => s + Math.max(0, r.elevationGainMeters || 0), 0) >= 500,
+  },
+  {
+    key: 'mountain_goat',
+    title: 'Mountain Goat',
+    subtitle: 'Climbed 2,000+ m total elevation gain',
+    unlocked: (runs) =>
+      runs.reduce((s, r) => s + Math.max(0, r.elevationGainMeters || 0), 0) >= 2000,
+  },
+  {
+    key: 'calorie_crusher',
+    title: 'Calorie Crusher',
+    subtitle: 'Burned 5,000+ total kcal across workouts',
+    unlocked: (runs) =>
+      runs.reduce((s, r) => s + Math.max(0, r.caloriesKcal || 0), 0) >= 5000,
+  },
+  {
+    key: 'consistency_10',
+    title: 'Consistency Club',
+    subtitle: 'Completed 10+ GPS workouts',
+    unlocked: (runs) => runs.length >= 10,
+  },
+  {
+    key: 'speed_demon',
+    title: 'Speed Demon',
+    subtitle: 'Sub-5:00/km pace on a 3+ km run',
+    unlocked: (runs) =>
+      runs.some(
+        (r) =>
+          (normalizeWorkoutType(r.workoutType) === 'running' ||
+            normalizeWorkoutType(r.workoutType) === 'trail_run') &&
+          r.distanceMeters >= 3000 &&
+          r.avgPaceSecPerKm > 0 &&
+          r.avgPaceSecPerKm <= 300
+      ),
+  },
+  {
+    key: 'club_1000',
+    title: '1000 KM Legend',
+    subtitle: '1,000+ cumulative km tracked across workouts',
+    unlocked: (runs) => runs.reduce((s, r) => s + r.distanceMeters / 1000, 0) >= 1000,
+  },
+  {
+    key: 'ultra_50k',
+    title: '50K Ultra Finisher',
+    subtitle: 'Completed 50+ km in a single session',
+    unlocked: (runs) => runs.some((r) => r.distanceMeters >= 50000),
+  },
+  {
+    key: 'century_ride',
+    title: 'Century Cyclist',
+    subtitle: 'Completed a 100+ km cycling ride',
+    unlocked: (runs) =>
+      runs.some(
+        (r) => normalizeWorkoutType(r.workoutType) === 'cycling' && r.distanceMeters >= 100000
+      ),
+  },
+  {
+    key: 'trail_blazer',
+    title: 'Trail Blazer',
+    subtitle: 'Logged 5+ trail running or hiking sessions',
+    unlocked: (runs) =>
+      runs.filter((r) => {
+        const w = normalizeWorkoutType(r.workoutType);
+        return w === 'trail_run' || w === 'hiking';
+      }).length >= 5,
+  },
+  {
+    key: 'endurance_hour',
+    title: 'Power Hour',
+    subtitle: 'Completed a single workout lasting 60+ minutes',
+    unlocked: (runs) => runs.some((r) => r.durationSec >= 3600),
+  },
+  {
+    key: 'consistency_25',
+    title: 'Silver Streak 25',
+    subtitle: 'Completed 25+ GPS workouts',
+    unlocked: (runs) => runs.length >= 25,
+  },
+  {
+    key: 'consistency_50',
+    title: 'Iron Habit 50',
+    subtitle: 'Completed 50+ GPS workouts',
+    unlocked: (runs) => runs.length >= 50,
+  },
+  {
+    key: 'sub_4_pace',
+    title: 'Rocket Stride',
+    subtitle: 'Sub-4:00/km pace on a 1+ km run',
+    unlocked: (runs) =>
+      runs.some(
+        (r) =>
+          (normalizeWorkoutType(r.workoutType) === 'running' ||
+            normalizeWorkoutType(r.workoutType) === 'trail_run') &&
+          r.distanceMeters >= 1000 &&
+          r.avgPaceSecPerKm > 0 &&
+          r.avgPaceSecPerKm <= 240
+      ),
+  },
 ];

@@ -96,3 +96,77 @@ export async function processProfilePhotoFile(file: File): Promise<string> {
 
   throw new Error('Image is too complex after compression. Please try a simpler or smaller photo.');
 }
+
+export const MAX_RUN_PHOTOS = 4;
+export const MAX_RUN_PHOTO_DATA_URL_LENGTH = 110000;
+
+function renderAspectRatioPhotoDataUrl(
+  img: HTMLImageElement,
+  maxSidePx: number,
+  mimeType: 'image/webp' | 'image/jpeg',
+  quality: number
+): string {
+  const srcW = img.naturalWidth || img.width;
+  const srcH = img.naturalHeight || img.height;
+  if (!srcW || !srcH) {
+    throw new Error('Selected image has invalid dimensions.');
+  }
+
+  const scale = Math.min(1, maxSidePx / Math.max(srcW, srcH));
+  const targetW = Math.max(1, Math.round(srcW * scale));
+  const targetH = Math.max(1, Math.round(srcH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Image processing is not available in this browser.');
+  }
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, targetW, targetH);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, srcW, srcH, 0, 0, targetW, targetH);
+
+  return canvas.toDataURL(mimeType, quality);
+}
+
+/**
+ * Validates and compresses a run photo (e.g. sunrise/sunset view) while preserving
+ * its natural aspect ratio into a compact data URI safe for Firestore storage.
+ */
+export async function processRunPhotoFile(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) {
+    throw new Error('Please choose a valid image file (JPEG, PNG, or WebP).');
+  }
+  if (file.size > MAX_AVATAR_FILE_BYTES) {
+    throw new Error('Each photo must be smaller than 12 MB.');
+  }
+
+  const rawDataUrl = await readFileAsDataUrl(file);
+  const img = await loadImageElement(rawDataUrl);
+
+  const attempts: Array<{ maxSide: number; mime: 'image/jpeg' | 'image/webp'; quality: number }> = [
+    { maxSide: 960, mime: 'image/webp', quality: 0.8 },
+    { maxSide: 960, mime: 'image/jpeg', quality: 0.78 },
+    { maxSide: 800, mime: 'image/jpeg', quality: 0.72 },
+    { maxSide: 720, mime: 'image/jpeg', quality: 0.64 },
+    { maxSide: 600, mime: 'image/jpeg', quality: 0.56 },
+    { maxSide: 480, mime: 'image/jpeg', quality: 0.5 },
+  ];
+
+  for (const attempt of attempts) {
+    const out = renderAspectRatioPhotoDataUrl(img, attempt.maxSide, attempt.mime, attempt.quality);
+    if (
+      (out.startsWith('data:image/jpeg;base64,') || out.startsWith('data:image/webp;base64,')) &&
+      out.length <= MAX_RUN_PHOTO_DATA_URL_LENGTH
+    ) {
+      return out;
+    }
+  }
+
+  throw new Error('Photo is too large after compression. Please try a different image.');
+}
+

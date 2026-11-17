@@ -34,7 +34,7 @@ export type RunArtShapeType =
 
 export type RunArtSize = 'compact' | 'standard' | 'large';
 
-export type AppTab = 'home' | 'plan' | 'social' | 'invites' | 'explore' | 'routes' | 'history' | 'profile';
+export type AppTab = 'home' | 'plan' | 'social' | 'messages' | 'invites' | 'explore' | 'routes' | 'history' | 'profile';
 
 export interface LatLngLiteral {
   lat: number;
@@ -193,10 +193,23 @@ export interface RunActivityDoc {
   encodedPolyline: string;
   startName: string;
   sampleCount: number;
+  notes?: string;
+  photos?: string[];
+  shoeBrand?: string;
+  shoeName?: string;
   status: 'completed';
   startedAt: string;
   finishedAt: string;
   createdAt?: unknown;
+}
+
+export interface RunningShoeItem {
+  id: string;
+  name: string;
+  brand?: string;
+  distanceKm: number;
+  maxKm: number;
+  isPrimary?: boolean;
 }
 
 export interface UserProfileDoc {
@@ -212,6 +225,8 @@ export interface UserProfileDoc {
   cityLng?: number;
   bio?: string;
   bioTags?: string[];
+  isPrivate?: boolean;
+  shoes?: RunningShoeItem[];
   totalDistanceKm: number;
   totalRuns: number;
   totalDurationSec: number;
@@ -325,6 +340,7 @@ export interface RunnerDirectoryDoc {
   preferredWorkout?: WorkoutType;
   bio?: string;
   bioTags?: string[];
+  isPrivate?: boolean;
   totalDistanceKm?: number;
   totalRuns?: number;
   updatedAt?: unknown;
@@ -427,9 +443,12 @@ export interface DailyRunPostDoc {
   elevationGainMeters?: number;
   startName: string;
   encodedPolyline?: string;
+  photos?: string[];
+  shoeBrand?: string;
+  shoeName?: string;
   moodTag?: string;
   likeCount: number;
-  visibility: 'public';
+  visibility: 'public' | 'friends';
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -453,3 +472,26 @@ export interface RunStoryDoc {
   visibility: 'public';
   createdAt?: unknown;
 }
+
+export interface RunClubDoc {
+  id: string;
+  name: string;
+  description: string;
+  city: string;
+  tags: string[];
+  ownerUid: string;
+  ownerName: string;
+  memberCount: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ClubMemberDoc {
+  id: string;
+  clubId: string;
+  userId: string;
+  memberName: string;
+  role: 'owner' | 'member';
+  joinedAt?: unknown;
+}
+

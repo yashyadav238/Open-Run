@@ -9,11 +9,20 @@ import {
   Copy,
   Edit3,
   FileText,
+  Footprints,
+  Globe,
   Globe2,
+  Heart,
   Loader2,
+  Lock,
   LogOut,
+  Medal,
+  Moon,
+  Palette,
   Plus,
   Shield,
+  Star,
+  Sun,
   Tag,
   Trash2,
   Trophy,
@@ -21,7 +30,7 @@ import {
   X,
 } from 'lucide-react';
 import { PlaceSearchInput } from '../components/PlaceSearchInput';
-import { WorkoutSelector } from '../components/WorkoutIcon';
+import { WorkoutIcon, WorkoutSelector } from '../components/WorkoutIcon';
 import { WorldCityMapPicker } from '../components/WorldCityMapPicker';
 import { useAuth } from '../context/AuthContext';
 import { processProfilePhotoFile } from '../lib/avatarUpload';
@@ -39,6 +48,11 @@ import {
   WORLD_RUNNING_CITIES,
   type ActiveRunningCity,
 } from '../data/worldCities';
+import {
+  loadFavoriteIds,
+  MOTIVATIONAL_QUOTES,
+  saveFavoriteIds,
+} from '../components/BrutalQuoteOverlay';
 import { ACHIEVEMENTS, CHALLENGES } from '../services/challengesService';
 import {
   checkUsernameAvailability,
@@ -49,13 +63,17 @@ import {
   saveSafetySettings,
   updateUserProfile,
 } from '../services/firestoreService';
-import type { CityName, WorkoutType } from '../types/run';
+import { APP_THEMES, type AppThemeId } from '../lib/theme';
+import { computeCategoryRanks } from '../lib/ranks';
+import type { CityName, RunningShoeItem, WorkoutType } from '../types/run';
 
 interface ProfileViewProps {
   activeCity: ActiveRunningCity;
   selectedWorkout?: WorkoutType;
   onSelectWorkout?: (workout: WorkoutType) => void;
   onSelectCity: (city: ActiveRunningCity) => void;
+  activeTheme?: AppThemeId;
+  onSelectTheme?: (theme: AppThemeId) => void;
   onOpenAuth: () => void;
 }
 
@@ -64,6 +82,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   selectedWorkout = 'running',
   onSelectWorkout,
   onSelectCity,
+  activeTheme = 'light',
+  onSelectTheme,
   onOpenAuth,
 }) => {
   const {
@@ -104,12 +124,140 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [trustedShare, setTrustedShare] = useState(false);
   const [savingSafety, setSavingSafety] = useState(false);
   const [safetyMsg, setSafetyMsg] = useState<string | null>(null);
+
+  // Profile Privacy (Public vs Private)
+  const [isPrivateProfile, setIsPrivateProfile] = useState<boolean>(Boolean(profile?.isPrivate));
+  const [savingPrivacy, setSavingPrivacy] = useState(false);
+  const [privacyMsg, setPrivacyMsg] = useState<string | null>(null);
+
+  // Running Shoes & Mileage
+  const [shoes, setShoes] = useState<RunningShoeItem[]>(profile?.shoes || []);
+  const [showAddShoe, setShowAddShoe] = useState(false);
+  const [shoeName, setShoeName] = useState('');
+  const [shoeBrand, setShoeBrand] = useState('');
+  const [shoeDistanceKm, setShoeDistanceKm] = useState('0');
+  const [shoeMaxKm, setShoeMaxKm] = useState('600');
+  const [savingShoes, setSavingShoes] = useState(false);
+  const [shoeMsg, setShoeMsg] = useState<string | null>(null);
+  const [editingShoeId, setEditingShoeId] = useState<string | null>(null);
+  const [editingShoeKm, setEditingShoeKm] = useState('');
+
+  useEffect(() => {
+    setIsPrivateProfile(Boolean(profile?.isPrivate));
+    setShoes(Array.isArray(profile?.shoes) ? profile.shoes : []);
+  }, [profile?.isPrivate, profile?.shoes]);
+
+  const handleTogglePrivacy = async (nextPrivate: boolean) => {
+    if (!user) {
+      onOpenAuth();
+      return;
+    }
+    setIsPrivateProfile(nextPrivate);
+    setSavingPrivacy(true);
+    setPrivacyMsg(null);
+    try {
+      await updateUserProfile(user.uid, { isPrivate: nextPrivate });
+      await refreshProfile();
+      setPrivacyMsg(
+        nextPrivate
+          ? 'Profile is now Private — only accepted friends can see your posts and DM you.'
+          : 'Profile is now Public — anyone can see your posts and send you DMs.'
+      );
+    } catch {
+      setIsPrivateProfile(!nextPrivate);
+      setPrivacyMsg('Could not update privacy setting. Please try again.');
+    } finally {
+      setSavingPrivacy(false);
+    }
+  };
+
+  const persistShoes = async (nextShoes: RunningShoeItem[], feedback: string) => {
+    if (!user) return;
+    setSavingShoes(true);
+    setShoeMsg(null);
+    try {
+      await updateUserProfile(user.uid, { shoes: nextShoes });
+      await refreshProfile();
+      setShoes(nextShoes);
+      setShoeMsg(feedback);
+    } catch {
+      setShoeMsg('Could not save running shoes. Please try again.');
+    } finally {
+      setSavingShoes(false);
+    }
+  };
+
+  const handleAddShoe = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    const cleanName = shoeName.trim();
+    if (!cleanName) return;
+    const dist = Math.max(0, Number(shoeDistanceKm) || 0);
+    const max = Math.max(100, Math.round(Number(shoeMaxKm) || 600));
+    const newShoe: RunningShoeItem = {
+      id: `shoe_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: cleanName.slice(0, 80),
+      brand: shoeBrand.trim() ? shoeBrand.trim().slice(0, 40) : undefined,
+      distanceKm: Number(dist.toFixed(2)),
+      maxKm: max,
+      isPrimary: shoes.length === 0,
+    };
+    const next = [...shoes, newShoe];
+    await persistShoes(next, `Added ${cleanName} to your rotation.`);
+    setShoeName('');
+    setShoeBrand('');
+    setShoeDistanceKm('0');
+    setShoeMaxKm('600');
+    setShowAddShoe(false);
+  };
+
+  const handleSetPrimaryShoe = async (shoeId: string) => {
+    const next = shoes.map((s) => ({ ...s, isPrimary: s.id === shoeId }));
+    await persistShoes(next, 'Primary running shoe updated.');
+  };
+
+  const handleQuickAddKm = async (shoeId: string, deltaKm: number) => {
+    const next = shoes.map((s) =>
+      s.id === shoeId
+        ? { ...s, distanceKm: Number(Math.max(0, (s.distanceKm || 0) + deltaKm).toFixed(2)) }
+        : s
+    );
+    await persistShoes(next, `Added +${deltaKm} km.`);
+  };
+
+  const handleSaveEditedKm = async (shoeId: string) => {
+    const parsed = Math.max(0, Number(editingShoeKm) || 0);
+    const next = shoes.map((s) =>
+      s.id === shoeId ? { ...s, distanceKm: Number(parsed.toFixed(2)) } : s
+    );
+    setEditingShoeId(null);
+    await persistShoes(next, 'Shoe mileage updated.');
+  };
+
+  const handleDeleteShoe = async (shoeId: string) => {
+    const remaining = shoes.filter((s) => s.id !== shoeId);
+    if (remaining.length > 0 && !remaining.some((s) => s.isPrimary)) {
+      remaining[0] = { ...remaining[0], isPrimary: true };
+    }
+    await persistShoes(remaining, 'Removed shoe from rotation.');
+  };
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
 
   const [bioInput, setBioInput] = useState(profile?.bio || '');
   const [bioTags, setBioTags] = useState<string[]>(profile?.bioTags || []);
   const [customBioTagInput, setCustomBioTagInput] = useState('');
   const [savingBio, setSavingBio] = useState(false);
+
+  const [favoriteQuoteIds, setFavoriteQuoteIds] = useState<string[]>(() => loadFavoriteIds());
+  const favoriteQuotes = MOTIVATIONAL_QUOTES.filter((q) => favoriteQuoteIds.includes(q.id));
+
+  const handleRemoveFavoriteQuote = (quoteId: string) => {
+    setFavoriteQuoteIds((prev) => {
+      const next = prev.filter((id) => id !== quoteId);
+      saveFavoriteIds(next);
+      return next;
+    });
+  };
   const [bioSavedMsg, setBioSavedMsg] = useState<string | null>(null);
   const [bioErrorMsg, setBioErrorMsg] = useState<string | null>(null);
   const bioSectionRef = useRef<HTMLElement>(null);
@@ -777,6 +925,398 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         )}
       </section>
 
+      {/* Profile Privacy (Public vs Private) */}
+      <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 sm:p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {isPrivateProfile ? (
+              <Lock className="h-5 w-5 text-[#172D27]" />
+            ) : (
+              <Globe className="h-5 w-5 text-[#172D27]" />
+            )}
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#141F1B]">
+                Profile Privacy
+              </h2>
+              <p className="text-xs text-[#5B6B64]">
+                Control who can see your daily workout posts and send you direct messages.
+              </p>
+            </div>
+          </div>
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-bold ${
+              isPrivateProfile
+                ? 'bg-amber-100 text-amber-900'
+                : 'bg-[#EBF5EE] text-[#172D27]'
+            }`}
+          >
+            {isPrivateProfile ? <Lock className="h-3 w-3" /> : <Globe className="h-3 w-3" />}
+            {isPrivateProfile ? 'Private Account' : 'Public Account'}
+          </span>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            disabled={savingPrivacy}
+            onClick={() => void handleTogglePrivacy(false)}
+            className={`flex flex-col gap-1 rounded-xl border p-4 text-left transition ${
+              !isPrivateProfile
+                ? 'border-[#172D27] bg-[#EBF5EE] ring-1 ring-[#172D27]'
+                : 'border-[#E5E3DC] bg-[#F6F5F0] hover:border-[#D9D7CE]'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 text-sm font-bold text-[#141F1B]">
+                <Globe className="h-4 w-4 text-[#172D27]" />
+                Public
+              </span>
+              {!isPrivateProfile && <CheckCircle2 className="h-4 w-4 text-[#172D27]" />}
+            </div>
+            <p className="text-xs text-[#5B6B64]">
+              Anybody can see your workout posts and send you direct messages.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            disabled={savingPrivacy}
+            onClick={() => void handleTogglePrivacy(true)}
+            className={`flex flex-col gap-1 rounded-xl border p-4 text-left transition ${
+              isPrivateProfile
+                ? 'border-[#172D27] bg-[#EBF5EE] ring-1 ring-[#172D27]'
+                : 'border-[#E5E3DC] bg-[#F6F5F0] hover:border-[#D9D7CE]'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="inline-flex items-center gap-1.5 text-sm font-bold text-[#141F1B]">
+                <Lock className="h-4 w-4 text-[#172D27]" />
+                Private
+              </span>
+              {isPrivateProfile && <CheckCircle2 className="h-4 w-4 text-[#172D27]" />}
+            </div>
+            <p className="text-xs text-[#5B6B64]">
+              Only accepted friends can see your posts and send you direct messages.
+            </p>
+          </button>
+        </div>
+
+        {privacyMsg && <p className="text-xs font-semibold text-[#30483E]">{privacyMsg}</p>}
+      </section>
+
+      {/* Running Shoes & Mileage Tracker */}
+      <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 sm:p-6 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Footprints className="h-5 w-5 text-[#172D27]" />
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#141F1B]">
+                Running Shoes &amp; Mileage
+              </h2>
+              <p className="text-xs text-[#5B6B64]">
+                Track how many km you&apos;ve logged on each pair. Your Primary shoe updates automatically after every run.
+              </p>
+            </div>
+          </div>
+          {user && (
+            <button
+              type="button"
+              onClick={() => setShowAddShoe((v) => !v)}
+              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl bg-[#172D27] px-3.5 text-xs font-semibold text-[#9AE62E] hover:bg-[#1F3C34]"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {showAddShoe ? 'Cancel' : 'Add Shoe'}
+            </button>
+          )}
+        </div>
+
+        {!user ? (
+          <div className="flex flex-col gap-3 rounded-xl bg-[#F6F5F0] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-[#5B6B64]">
+              Sign in to list your running shoes and track their mileage automatically.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenAuth}
+              className="min-h-[40px] shrink-0 rounded-xl bg-[#172D27] px-4 text-xs font-semibold text-[#9AE62E]"
+            >
+              Sign In
+            </button>
+          </div>
+        ) : (
+          <>
+            {showAddShoe && (
+              <form
+                onSubmit={handleAddShoe}
+                className="rounded-xl border border-[#D9D7CE] bg-[#F6F5F0] p-4 space-y-3"
+              >
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-semibold text-[#5B6B64]">Shoe Model *</label>
+                    <input
+                      type="text"
+                      required
+                      maxLength={80}
+                      value={shoeName}
+                      onChange={(e) => setShoeName(e.target.value)}
+                      placeholder="e.g. Pegasus 41, Novablast 4"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 text-xs text-[#141F1B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-[#5B6B64]">Brand (optional)</label>
+                    <input
+                      type="text"
+                      maxLength={40}
+                      value={shoeBrand}
+                      onChange={(e) => setShoeBrand(e.target.value)}
+                      placeholder="e.g. Nike, ASICS, Adidas"
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 text-xs text-[#141F1B]"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-semibold text-[#5B6B64]">Current Distance (km)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={50000}
+                      step="0.1"
+                      value={shoeDistanceKm}
+                      onChange={(e) => setShoeDistanceKm(e.target.value)}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 font-mono text-xs text-[#141F1B]"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-[#5B6B64]">Target Retirement (km)</label>
+                    <input
+                      type="number"
+                      min={100}
+                      max={5000}
+                      step="50"
+                      value={shoeMaxKm}
+                      onChange={(e) => setShoeMaxKm(e.target.value)}
+                      className="mt-1 min-h-[40px] w-full rounded-xl border border-[#D9D7CE] bg-white px-3 font-mono text-xs text-[#141F1B]"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={savingShoes || !shoeName.trim()}
+                  className="min-h-[40px] rounded-xl bg-[#172D27] px-4 text-xs font-semibold text-[#9AE62E] disabled:opacity-50"
+                >
+                  {savingShoes ? 'Saving...' : 'Save Running Shoe'}
+                </button>
+              </form>
+            )}
+
+            {shoes.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-[#D9D7CE] bg-[#F6F5F0]/60 p-5 text-center text-xs text-[#5B6B64]">
+                No running shoes added yet. Tap <strong>Add Shoe</strong> to log your daily trainers or race-day shoes.
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {shoes.map((shoe) => {
+                  const pct = Math.min(100, Math.round(((shoe.distanceKm || 0) / (shoe.maxKm || 600)) * 100));
+                  const barColor =
+                    pct >= 100 ? 'bg-red-600' : pct >= 80 ? 'bg-amber-500' : 'bg-[#172D27]';
+                  const isEditing = editingShoeId === shoe.id;
+
+                  return (
+                    <div
+                      key={shoe.id}
+                      className={`rounded-xl border p-4 space-y-3 ${
+                        shoe.isPrimary
+                          ? 'border-[#172D27] bg-[#EBF5EE]/50'
+                          : 'border-[#E5E3DC] bg-[#F6F5F0]'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="truncate text-sm font-bold text-[#141F1B]">
+                              {shoe.brand ? `${shoe.brand} ${shoe.name}` : shoe.name}
+                            </p>
+                            {shoe.isPrimary && (
+                              <span className="inline-flex items-center gap-0.5 rounded-md bg-[#172D27] px-1.5 py-0.5 text-[10px] font-bold text-[#9AE62E]">
+                                <Star className="h-2.5 w-2.5 fill-current" />
+                                Primary
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 font-mono text-xs font-bold text-[#172D27] tabular-nums">
+                            {shoe.distanceKm.toFixed(1)} / {shoe.maxKm} km ({pct}%)
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={savingShoes}
+                          onClick={() => void handleDeleteShoe(shoe.id)}
+                          aria-label={`Remove ${shoe.name}`}
+                          className="rounded-lg p-1.5 text-[#5B6B64] hover:bg-white hover:text-red-600"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-[#E2E0D7]">
+                        <div
+                          className={`h-full transition-all ${barColor}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+
+                      {isEditing ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={50000}
+                            step="0.1"
+                            value={editingShoeKm}
+                            onChange={(e) => setEditingShoeKm(e.target.value)}
+                            className="min-h-[32px] w-24 rounded-lg border border-[#D9D7CE] bg-white px-2 font-mono text-xs"
+                          />
+                          <button
+                            type="button"
+                            disabled={savingShoes}
+                            onClick={() => void handleSaveEditedKm(shoe.id)}
+                            className="rounded-lg bg-[#172D27] px-2.5 py-1 text-[11px] font-semibold text-[#9AE62E]"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingShoeId(null)}
+                            className="rounded-lg border border-[#D9D7CE] bg-white px-2 py-1 text-[11px] font-semibold text-[#5B6B64]"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={savingShoes}
+                            onClick={() => void handleQuickAddKm(shoe.id, 5)}
+                            className="rounded-lg border border-[#D9D7CE] bg-white px-2 py-1 font-mono text-[11px] font-semibold text-[#172D27] hover:bg-[#EBF5EE]"
+                          >
+                            +5 km
+                          </button>
+                          <button
+                            type="button"
+                            disabled={savingShoes}
+                            onClick={() => {
+                              setEditingShoeId(shoe.id);
+                              setEditingShoeKm(String(shoe.distanceKm));
+                            }}
+                            className="rounded-lg border border-[#D9D7CE] bg-white px-2 py-1 text-[11px] font-semibold text-[#5B6B64] hover:text-[#141F1B]"
+                          >
+                            Edit km
+                          </button>
+                          {!shoe.isPrimary && (
+                            <button
+                              type="button"
+                              disabled={savingShoes}
+                              onClick={() => void handleSetPrimaryShoe(shoe.id)}
+                              className="rounded-lg border border-[#D9D7CE] bg-white px-2 py-1 text-[11px] font-semibold text-[#172D27] hover:bg-[#EBF5EE]"
+                            >
+                              Set Primary
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {shoeMsg && <p className="text-xs font-semibold text-[#30483E]">{shoeMsg}</p>}
+          </>
+        )}
+      </section>
+
+      {/* Workout Category Ranks (Bronze I-III -> Legend 1000+ km) */}
+      {(() => {
+        const { overall, categories } = computeCategoryRanks(runs);
+        return (
+          <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 sm:p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Medal className="h-5 w-5 text-[#172D27]" />
+                <div>
+                  <h2 className="font-display text-lg font-bold text-[#141F1B]">
+                    Athlete Ranks by Workout Category
+                  </h2>
+                  <p className="text-xs text-[#5B6B64]">
+                    Bronze I–III · Silver · Gold · Platinum · Emerald · Diamond · Pro · Ultra · Legend (1,000+ km)
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold ${overall.current.badgeClass}`}
+                >
+                  Overall: {overall.current.label}
+                </span>
+                <span className="font-mono text-xs font-bold text-[#172D27] tabular-nums">
+                  {overall.totalKm} km
+                </span>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {categories.map((cat) => (
+                <div
+                  key={cat.workoutType}
+                  className="rounded-xl border border-[#E5E3DC] bg-[#F6F5F0] p-4 space-y-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#172D27] text-[#9AE62E]">
+                        <WorkoutIcon type={cat.workoutType} className="h-4 w-4" />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-[#141F1B]">{cat.label}</p>
+                        <p className="text-[11px] text-[#5B6B64]">
+                          {cat.sessions} {cat.sessions === 1 ? 'session' : 'sessions'} · {cat.rank.totalKm} km
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-lg border px-2 py-1 text-[11px] font-bold ${cat.rank.current.badgeClass}`}
+                    >
+                      {cat.rank.current.label}
+                    </span>
+                  </div>
+
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-[#E2E0D7]">
+                    <div
+                      className={`h-full transition-all ${cat.rank.current.barClass}`}
+                      style={{ width: `${cat.rank.progressPct}%` }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-[#5B6B64] font-mono tabular-nums">
+                    {cat.rank.next ? (
+                      <>
+                        <span>{cat.rank.kmToNext} km to {cat.rank.next.label}</span>
+                        <span>{cat.rank.progressPct}%</span>
+                      </>
+                    ) : (
+                      <span className="font-bold text-[#172D27]">Max Rank Achieved · Legend</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      })()}
+
       {/* Challenges & Achievements */}
       <div className="grid gap-6 lg:grid-cols-12">
         <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 lg:col-span-7">
@@ -842,6 +1382,144 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           </div>
         </section>
       </div>
+
+      {/* Favorite Quotes */}
+      <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Heart className="h-5 w-5 text-rose-500 fill-rose-500" />
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#141F1B]">
+                Favorite Quotes
+              </h2>
+              <p className="text-xs text-[#5B6B64]">
+                Quotes you hearted on the startup motivation screen
+              </p>
+            </div>
+          </div>
+          <span className="rounded-lg bg-[#EBF5EE] px-2.5 py-1 font-mono text-xs font-bold text-[#172D27]">
+            {favoriteQuotes.length} saved
+          </span>
+        </div>
+
+        {favoriteQuotes.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-[#D9D7CE] bg-[#F6F5F0]/60 p-5 text-center text-xs text-[#5B6B64]">
+            No favorite quotes saved yet. Tap the heart icon on any quote when you open the app to save it here.
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {favoriteQuotes.map((q) => (
+              <div
+                key={q.id}
+                className="flex flex-col justify-between rounded-xl border border-[#E5E3DC] bg-[#F6F5F0] p-4 space-y-3"
+              >
+                <p className="font-display text-sm font-bold leading-snug text-[#141F1B]">
+                  &ldquo;{q.text}&rdquo;
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    {q.author ? (
+                      <>
+                        <p className="truncate text-xs font-bold text-[#172D27]">— {q.author}</p>
+                        {q.role && (
+                          <p className="truncate text-[10px] text-[#5B6B64]">{q.role}</p>
+                        )}
+                      </>
+                    ) : (
+                      q.subline && (
+                        <p className="truncate font-mono text-[11px] font-semibold text-[#30483E]">
+                          {q.subline}
+                        </p>
+                      )
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Remove quote from favorites"
+                    title="Remove from favorites"
+                    onClick={() => handleRemoveFavoriteQuote(q.id)}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-rose-500 border border-[#E5E3DC] hover:bg-rose-50"
+                  >
+                    <Heart className="h-4 w-4 fill-current" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Appearance & UI Theme Settings */}
+      <section className="rounded-2xl border border-[#E5E3DC] bg-white p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Palette className="h-5 w-5 text-[#172D27]" />
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#141F1B]">
+                Appearance &amp; UI Theme
+              </h2>
+              <p className="text-xs text-[#5B6B64]">
+                Switch between Light, Dark, and custom color themes anytime.
+              </p>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1.5 rounded-lg bg-[#EBF5EE] px-2.5 py-1 text-[11px] font-bold text-[#172D27]">
+            {APP_THEMES.find((t) => t.id === activeTheme)?.mode === 'dark' ? (
+              <Moon className="h-3.5 w-3.5" />
+            ) : (
+              <Sun className="h-3.5 w-3.5" />
+            )}
+            {APP_THEMES.find((t) => t.id === activeTheme)?.name || 'Open Forest'}
+          </span>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {APP_THEMES.map((theme) => {
+            const isSelected = activeTheme === theme.id;
+            return (
+              <button
+                key={theme.id}
+                type="button"
+                onClick={() => onSelectTheme?.(theme.id)}
+                className={`flex flex-col justify-between rounded-xl border p-3.5 text-left transition ${
+                  isSelected
+                    ? 'border-[#172D27] bg-[#EBF5EE] ring-1 ring-[#172D27]'
+                    : 'border-[#E5E3DC] bg-[#F6F5F0] hover:border-[#D9D7CE]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="h-5 w-5 rounded-full border border-black/15"
+                      style={{ backgroundColor: theme.swatches.canvas }}
+                    />
+                    <span
+                      className="h-5 w-5 rounded-full border border-black/15"
+                      style={{ backgroundColor: theme.swatches.brand }}
+                    />
+                    <span
+                      className="h-5 w-5 rounded-full border border-black/15"
+                      style={{ backgroundColor: theme.swatches.accent }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] font-bold uppercase text-[#5B6B64]">
+                      {theme.mode}
+                    </span>
+                    {isSelected && <CheckCircle2 className="h-4 w-4 text-[#172D27]" />}
+                  </div>
+                </div>
+                <div className="mt-2.5">
+                  <p className="text-sm font-bold text-[#141F1B]">{theme.name}</p>
+                  <p className="mt-0.5 text-[11px] leading-snug text-[#5B6B64]">
+                    {theme.description}
+                  </p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       {/* Preferences & Privacy / Safety */}
       {!user ? (
